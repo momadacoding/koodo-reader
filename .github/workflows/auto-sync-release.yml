@@ -1,0 +1,78 @@
+name: Auto sync upstream and release
+
+on:
+  schedule:
+    # 每 6 小时检查一次
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-and-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/koodo-reader/koodo-reader.git
+          git fetch upstream --tags
+
+      - name: Get upstream latest release
+        id: upstream
+        run: |
+          latest=$(gh api repos/koodo-reader/koodo-reader/releases/latest --jq '.tag_name')
+          echo "tag=$latest" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: $latest"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if already synced
+        id: check
+        run: |
+          upstream_tag="${{ steps.upstream.outputs.tag }}"
+          our_tag="${upstream_tag}-acorny"
+
+          if git rev-parse "$our_tag" >/dev/null 2>&1; then
+            echo "Already synced to $our_tag"
+            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Need to sync: $upstream_tag -> $our_tag"
+            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+            echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync upstream to dev
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          git checkout dev
+          git rebase upstream/dev || {
+            echo "Rebase failed, attempting abort and merge instead"
+            git rebase --abort
+            git merge upstream/dev --no-edit
+          }
+
+      - name: Push synced dev
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          git push origin dev --force-with-lease
+
+      - name: Create and push release tag
+        if: steps.check.outputs.should_sync == 'true'
+        run: |
+          our_tag="${{ steps.check.outputs.our_tag }}"
+          git tag "$our_tag"
+          git push origin "$our_tag"
+          echo "Created tag: $our_tag"
