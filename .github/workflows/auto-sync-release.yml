@@ -54,6 +54,7 @@ jobs:
           upstream_tag="${{ steps.upstream.outputs.tag }}"
           our_tag="${upstream_tag}-acorny"
           force="${{ github.event.inputs.force }}"
+          dev_sha="$(git rev-parse HEAD)"
 
           if [ "$force" = "true" ]; then
             echo "Force build requested"
@@ -63,8 +64,16 @@ jobs:
           fi
 
           if git rev-parse "$our_tag" >/dev/null 2>&1; then
-            echo "Already synced to $our_tag"
-            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            tag_sha="$(git rev-list -n 1 "$our_tag")"
+
+            if [ "$tag_sha" = "$dev_sha" ]; then
+              echo "Already synced to $our_tag at $dev_sha"
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "Tag $our_tag points to $tag_sha, but dev is $dev_sha"
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+              echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "Need to sync: $upstream_tag -> $our_tag"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
