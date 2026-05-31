@@ -32,7 +32,11 @@ jobs:
           jq 'del(.build.mac.notarize, .build.mac.identity)' package.json > package.json.tmp && mv package.json.tmp package.json
 
       - name: Clean dist directory
-        run: rm -rf dist/
+        shell: pwsh
+        run: |
+          if (Test-Path dist) {
+            Remove-Item dist -Recurse -Force
+          }
 
       - name: Build/release Electron app
         uses: samuelmeuli/action-electron-builder@v1.6.0
