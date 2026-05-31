@@ -138,7 +138,7 @@
     "publish": {
       "provider": "github",
       "repo": "koodo-reader",
-      "owner": "koodo-reader"
+      "owner": "momadacoding"
     },
     "buildDependenciesFromSource": false,
     "nodeGypRebuild": false,
