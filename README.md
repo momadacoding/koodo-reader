@@ -16,6 +16,17 @@
 <h3 align="center">
   A cross-platform ebook reader
 </h3>
+
+<div align="center">
+
+[![Fork Badge](https://img.shields.io/badge/fork-momadacoding%2Facorny--sync-blue)](https://github.com/momadacoding/koodo-reader)
+
+</div>
+
+> **This is a fork** that adds **Acorny** note/highlight sync support on top of the original Koodo Reader.
+>
+> All original features are preserved. See [Acorny Sync](#acorny-sync) below for details.
+
 <div align="center">
 
 [Download](https://koodoreader.com/en) | [Preview](https://web.koodoreader.com) | [Roadmap](https://koodoreader.com/en/roadmap) | [Document](https://koodoreader.com/en/document) | [Plugins](https://koodoreader.com/en/plugin)
@@ -51,7 +62,7 @@
 - Easily import books from **OneDrive**, **Google Drive**, **MEGA**, **Yandex Disk**, **Box**, **FTP**, **SFTP**, **WebDAV**, **SMB**, or **Object Storage**
 - Use your custom AI model to power AI Translation, AI Dictionary, AI Summarization, and AI Encyclopedia
 - Sync reading progress with **KOReader**
-- Sync notes and highlights to **Readwise**, **Notion**, **Obsidian**, **Joplin**, and more
+- Sync notes and highlights to **Readwise**, **Notion**, **Obsidian**, **Joplin**, **Acorny**, and more
 - Support local MDX dictionary lookup
 - Automatically sync words to **Anki** and **Eudic**
 - Protect your library with password, PIN, Windows Hello, Touch ID, and more
@@ -137,6 +148,36 @@ brew install --cask koodo-reader
   <kbd><img src="https://dl.koodoreader.com/screenshots/4.png" width="800px"></kbd>
   <br/>
 </div>
+
+## Acorny Sync
+
+This fork adds integration with [Acorny](https://acorny.io), a Readwise-compatible highlights service.
+
+### How to enable
+
+1. Go to **Settings** → **Data** → **Auto sync notes and highlights to Acorny**
+2. Turn on the toggle
+3. Enter your **Acorny Personal Access Token**
+4. Your notes and highlights will be automatically synced to Acorny when you create them
+
+### What gets synced
+
+- Highlight text
+- Chapter/location
+- Book title and author
+- Your note text (if any)
+- Highlight date
+
+### Build from this fork
+
+```bash
+git clone https://github.com/momadacoding/koodo-reader.git
+cd koodo-reader
+git checkout feat/acorny-note-sync
+yarn
+yarn dev     # desktop
+yarn start   # web
+```
 
 ## Develop
 
