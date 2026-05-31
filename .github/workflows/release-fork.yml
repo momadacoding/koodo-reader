@@ -26,14 +26,10 @@ jobs:
       - name: Install dependencies
         run: yarn
 
-      - name: Fix macOS file association icons (fork only)
+      - name: Disable macOS notarization (fork only)
         if: startsWith(matrix.os, 'macos')
         run: |
-          # Disable notarization
           jq 'del(.build.mac.notarize, .build.mac.identity)' package.json > package.json.tmp && mv package.json.tmp package.json
-          # Duplicate icon to avoid EEXIST when .azw3 and .azw both point to azw3.icns
-          cp assets/icons/azw3.icns assets/icons/azw.icns
-          jq '.build.fileAssociations[5].icon = "assets/icons/azw"' package.json > package.json.tmp && mv package.json.tmp package.json
 
       - name: Clean dist directory
         run: rm -rf dist/

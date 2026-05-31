@@ -169,7 +169,7 @@
       },
       {
         "ext": "azw",
-        "icon": "assets/icons/azw3",
+        "icon": "assets/icons/azw",
         "role": "Viewer",
         "mimeType": "application/vnd.amazon.ebook"
       },
@@ -181,19 +181,19 @@
       },
       {
         "ext": "cbr",
-        "icon": "assets/icons/comic",
+        "icon": "assets/icons/cbr",
         "role": "Viewer",
         "mimeType": "application/x-cbr"
       },
       {
         "ext": "cbt",
-        "icon": "assets/icons/comic",
+        "icon": "assets/icons/cbt",
         "role": "Viewer",
         "mimeType": "application/x-cbt"
       },
       {
         "ext": "cb7",
-        "icon": "assets/icons/comic",
+        "icon": "assets/icons/cb7",
         "role": "Viewer",
         "mimeType": "application/x-cb7"
       },
