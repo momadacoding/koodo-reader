@@ -2,9 +2,14 @@ name: Auto sync upstream and release
 
 on:
   schedule:
-    # 每 6 小时检查一次
     - cron: '0 */6 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force build even if already synced'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   check-and-sync:
@@ -12,6 +17,10 @@ jobs:
     permissions:
       contents: write
       actions: write
+
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      our_tag: ${{ steps.decide.outputs.our_tag }}
 
     steps:
       - name: Check out repository
@@ -39,40 +48,63 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check if already synced
-        id: check
+      - name: Decide whether to sync/build
+        id: decide
         run: |
           upstream_tag="${{ steps.upstream.outputs.tag }}"
           our_tag="${upstream_tag}-acorny"
+          force="${{ github.event.inputs.force }}"
+
+          if [ "$force" = "true" ]; then
+            echo "Force build requested"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if git rev-parse "$our_tag" >/dev/null 2>&1; then
             echo "Already synced to $our_tag"
-            echo "should_sync=false" >> "$GITHUB_OUTPUT"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
           else
             echo "Need to sync: $upstream_tag -> $our_tag"
-            echo "should_sync=true" >> "$GITHUB_OUTPUT"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
             echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sync upstream to dev
-        if: steps.check.outputs.should_sync == 'true'
+        if: steps.decide.outputs.should_build == 'true'
         run: |
           git checkout dev
           git rebase upstream/dev || {
-            echo "Rebase failed, attempting abort and merge instead"
+            echo "Rebase failed, attempting merge instead"
             git rebase --abort
             git merge upstream/dev --no-edit
           }
 
       - name: Push synced dev
-        if: steps.check.outputs.should_sync == 'true'
+        if: steps.decide.outputs.should_build == 'true'
         run: |
           git push origin dev --force-with-lease
 
       - name: Create and push release tag
-        if: steps.check.outputs.should_sync == 'true'
+        if: steps.decide.outputs.should_build == 'true'
         run: |
-          our_tag="${{ steps.check.outputs.our_tag }}"
-          git tag "$our_tag"
-          git push origin "$our_tag"
+          our_tag="${{ steps.decide.outputs.our_tag }}"
+          git tag -f "$our_tag"
+          git push -f origin "$our_tag"
           echo "Created tag: $our_tag"
+
+  trigger-build:
+    needs: check-and-sync
+    if: needs.check-and-sync.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Trigger build workflow
+        run: |
+          our_tag="${{ needs.check-and-sync.outputs.our_tag }}"
+          echo "Triggering build for tag: $our_tag"
+          gh workflow run release-fork.yml --ref "$our_tag" -R ${{ github.repository }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
