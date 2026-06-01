@@ -320,7 +320,9 @@
     "snap": {
       "publish": [
         {
-          "provider": "github"
+          "provider": "github",
+          "repo": "koodo-reader",
+          "owner": "momadacoding"
         }
       ]
     }
