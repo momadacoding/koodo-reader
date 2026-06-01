@@ -82,11 +82,6 @@ export const generalSettingList = [
   },
   {
     isElectron: true,
-    title: "Disable update notification",
-    propName: "isDisableUpdate",
-  },
-  {
-    isElectron: true,
     title: "Delete original file when permanently deleting books",
     propName: "isDeleteOriginal",
   },
@@ -189,6 +184,8 @@ export const noteSyncSettingList = [
     title: "Auto sync notes and highlights to Acorny",
     desc: "",
     propName: "isEnableAcornySync",
+    tutorialUrl:
+      "https://docs.acorny.io/import-sync/moon-reader/#ongoing-push-sync-from-moon-reader",
     requiresAuth: true,
     authFields: [
       {

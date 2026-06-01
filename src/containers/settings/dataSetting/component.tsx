@@ -252,11 +252,12 @@ class DataSetting extends React.Component<SettingInfoProps, SettingInfoState> {
         defaultValues,
         "",
         labelsMap,
-        getWebsiteUrl() +
-          (ConfigService.getReaderConfig("lang").startsWith("zh")
-            ? "/zh"
-            : "/en") +
-          "/add-thirdparty"
+        item.tutorialUrl ||
+          (getWebsiteUrl() +
+            (ConfigService.getReaderConfig("lang").startsWith("zh")
+              ? "/zh"
+              : "/en") +
+            "/add-thirdparty")
       );
 
       if (!result) {

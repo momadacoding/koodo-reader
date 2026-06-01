@@ -17,6 +17,7 @@ import {
   checkStableUpdate,
   handleClearToken,
 } from "../../../utils/request/common";
+import { isBuiltinAutoUpdateEnabled } from "../../../utils/updateSupport";
 import {
   ConfigService,
   TokenService,
@@ -36,6 +37,9 @@ class UpdateInfo extends React.Component<UpdateInfoProps, UpdateInfoState> {
     };
   }
   async componentDidMount() {
+    if (!isBuiltinAutoUpdateEnabled()) {
+      return;
+    }
     if (!this.props.currentBook.key) {
       if (!isElectron) {
         return;
