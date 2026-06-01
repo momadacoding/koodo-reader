@@ -27,6 +27,16 @@
 >
 > All original features are preserved. See [Acorny Sync](#acorny-sync) below for details.
 
+## Why this fork exists
+
+The upstream repository is published under the [GNU AGPL v3](https://github.com/koodo-reader/koodo-reader/blob/dev/LICENSE). We originally submitted the Acorny integration as [upstream PR #1613](https://github.com/koodo-reader/koodo-reader/pull/1613), which only modified files in the public repository.
+
+The upstream maintainer closed the PR with the following explanation:
+
+> Sorry, we can't accept pull request that requires modification to our proprietary code.
+
+Because the proprietary code and the required changes are not available to contributors, there is no actionable path to contribute this integration upstream. This fork exists to maintain and distribute the Acorny integration in the public codebase.
+
 <div align="center">
 
 [Download](https://koodoreader.com/en) | [Preview](https://web.koodoreader.com) | [Roadmap](https://koodoreader.com/en/roadmap) | [Document](https://koodoreader.com/en/document) | [Plugins](https://koodoreader.com/en/plugin)
