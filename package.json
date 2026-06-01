@@ -138,7 +138,8 @@
     "publish": {
       "provider": "github",
       "repo": "koodo-reader",
-      "owner": "momadacoding"
+      "owner": "momadacoding",
+      "releaseType": "release"
     },
     "buildDependenciesFromSource": false,
     "nodeGypRebuild": false,
@@ -322,7 +323,8 @@
         {
           "provider": "github",
           "repo": "koodo-reader",
-          "owner": "momadacoding"
+          "owner": "momadacoding",
+          "releaseType": "release"
         }
       ]
     }
