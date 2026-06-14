@@ -90,6 +90,20 @@ jobs:
             git merge upstream/dev --no-edit
           }
 
+      - name: Preserve fork workflows
+        if: steps.decide.outputs.should_build == 'true'
+        run: |
+          upstream_tag="${{ steps.upstream.outputs.tag }}"
+
+          git reset --soft origin/dev
+          git restore --source=origin/dev --staged --worktree .github/workflows
+
+          if git diff --cached --quiet; then
+            echo "No upstream changes to commit after preserving fork workflows"
+          else
+            git commit -m "Sync upstream $upstream_tag"
+          fi
+
       - name: Push synced dev
         if: steps.decide.outputs.should_build == 'true'
         run: |
