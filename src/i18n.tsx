@@ -41,13 +41,30 @@ import translationFI from "./assets/locales/fi.json";
 import translationIE from "./assets/locales/ie.json";
 import translationPT from "./assets/locales/pt.json";
 import translationVI from "./assets/locales/vi.json";
+import acornyTranslationEN from "./assets/locales/acorny/en.json";
+import acornyTranslationZHCN from "./assets/locales/acorny/zh-CN.json";
+
+export const mergeLocaleWithAcornyOverlay = (
+  locale: Record<string, string>,
+  acornyOverlay: Record<string, string>
+) => ({
+  ...locale,
+  ...acornyOverlay,
+});
+
 // the translations
 const resources = {
   en: {
-    translation: translationEN,
+    translation: mergeLocaleWithAcornyOverlay(
+      translationEN,
+      acornyTranslationEN
+    ),
   },
   zhCN: {
-    translation: translationZHCN,
+    translation: mergeLocaleWithAcornyOverlay(
+      translationZHCN,
+      acornyTranslationZHCN
+    ),
   },
   zhTW: {
     translation: translationZHTW,
