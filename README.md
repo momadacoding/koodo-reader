@@ -80,6 +80,7 @@ Because the proprietary code and the required changes are not available to contr
 - One-click export of notes and highlights, supporting **CSV**, **Markdown**, **HTML**, **TXT**, and **PDF**
 - Privacy-first design: no tracking services, and no proactive uploading of your reading data or personal information
 - Support **OPDS** protocol and share your library as an **OPDS** feed
+- Support browser extension to save anything on the web to your library
 - Built-in 50+ plugins for translation, dictionaries, and text-to-speech, with support for custom plugins
 - Support vertical layout book
 - Support reading statistics
@@ -101,6 +102,8 @@ Because the proprietary code and the required changes are not available to contr
 ### Android version：[Download](https://koodoreader.com/en/download)
 
 ### iOS version：[Download](https://koodoreader.com/en/download)
+
+### Browser extension：[Download](https://www.koodoreader.com/en/use-extension)
 
 ### Install with Scoop:
 

@@ -488,7 +488,8 @@ let options = {
   height: parseInt(store.get("mainWinHeight") || 660) / mainWinDisplayScale,
   x: parseInt(store.get("mainWinX")),
   y: parseInt(store.get("mainWinY")),
-  backgroundColor: "#fff",
+  backgroundColor:
+    store.get("appSkin") === "night" ? "rgba(47, 52, 55, 1)" : "#fff",
   minWidth: 300,
   minHeight: 100,
   webPreferences: {
@@ -650,13 +651,13 @@ const isWindowPartiallyVisible = (bounds) => {
   return false;
 };
 const createTray = () => {
-  const iconPath = isDev
+  let iconPath = isDev
     ? path.join(__dirname, "./public/assets/icon.png")
     : path.join(__dirname, "./build/assets/icon.png");
   let trayIcon = nativeImage.createFromPath(iconPath);
   if (os.platform() === "darwin") {
-    trayIcon = trayIcon.resize({ width: 16 });
-    trayIcon.setTemplateImage(true);
+    trayIcon = trayIcon.resize({ width: 16, height: 16, quality: "best" });
+    trayIcon.setTemplateImage(false);
   }
   tray = new Tray(trayIcon);
   const contextMenu = Menu.buildFromTemplate([
@@ -1223,6 +1224,9 @@ const createMainWin = () => {
   ipcMain.handle("get-mac", async (event, config) => {
     const { machineIdSync } = require("node-machine-id");
     return machineIdSync();
+  });
+  ipcMain.handle("get-device-name", async () => {
+    return os.hostname() || "";
   });
   ipcMain.handle("get-store-value", async (event, config) => {
     return store.get(config.key);

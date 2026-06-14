@@ -437,6 +437,14 @@ export const handleFullScreen = () => {
     } else {
       window.require("electron").ipcRenderer.invoke("enter-fullscreen", "ping");
     }
+  } else {
+    const el = document.documentElement as any;
+    const requestFS =
+      el.requestFullscreen ||
+      el.webkitRequestFullscreen ||
+      el.mozRequestFullScreen ||
+      el.msRequestFullscreen;
+    requestFS && requestFS.call(el);
   }
 };
 export const handleExitFullScreen = () => {
@@ -447,6 +455,16 @@ export const handleExitFullScreen = () => {
         .ipcRenderer.invoke("exit-tab-fullscreen", "ping");
     } else {
       window.require("electron").ipcRenderer.invoke("exit-fullscreen", "ping");
+    }
+  } else {
+    const doc = document as any;
+    const exitFS =
+      doc.exitFullscreen ||
+      doc.webkitExitFullscreen ||
+      doc.mozCancelFullScreen ||
+      doc.msExitFullscreen;
+    if (exitFS && doc.fullscreenElement) {
+      exitFS.call(doc);
     }
   }
 };
@@ -1491,9 +1509,28 @@ export const checkReachPageEnd = (
     voiceName: string;
     voiceEngine: string;
   }[],
-  visibleTextList: string[]
+  visibleTextList: string[],
+  currentBook: Book
 ) => {
   if (visibleTextList.length === 0) return true;
+  if (
+    ConfigService.getAllListConfig("multiRoleVoiceBooks").includes(
+      currentBook?.key
+    )
+  ) {
+    if (
+      visibleTextList[visibleTextList.length - 1].indexOf("“") > -1 ||
+      visibleTextList[visibleTextList.length - 1].indexOf('"') > -1
+    ) {
+      return visibleTextList[visibleTextList.length - 1].endsWith(
+        nodeList[nodeIndex].text
+      );
+    } else {
+      return (
+        visibleTextList[visibleTextList.length - 1] === nodeList[nodeIndex].text
+      );
+    }
+  }
   let nodeTextList = nodeList.map((node) => node.text);
   let lastMatchIndex = findLastMatchIndex(nodeTextList, visibleTextList);
   return lastMatchIndex === nodeIndex;
@@ -1506,7 +1543,7 @@ export const findLastMatchIndex = (a: string[], b: string[]) => {
     // 从当前 aIndex 开始在 a 中查找 b[i]
     let found = false;
     for (let j = aIndex; j < a.length; j++) {
-      if (a[j] === b[i]) {
+      if (a[j].trim() === b[i].trim()) {
         lastMatchIndex = j;
         aIndex = j + 1;
         found = true;

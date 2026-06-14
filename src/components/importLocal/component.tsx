@@ -1,7 +1,6 @@
 import React from "react";
 import "./importLocal.css";
 import BookModel from "../../models/Book";
-
 import { Trans } from "react-i18next";
 import Dropzone from "react-dropzone";
 import * as Kookit from "../../assets/lib/kookit.min";
@@ -43,9 +42,7 @@ declare var window: any;
 let clickFilePath = "";
 
 class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
-  private resizeHandler: (() => void) | null = null;
-  private ipcImportUrlListener: ((event: any, config: any) => void) | null =
-    null;
+  resizeHandler: (() => void) | null = null;
 
   constructor(props: ImportLocalProps) {
     super(props);
@@ -81,29 +78,19 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
         false
       );
 
-      this.ipcImportUrlListener = async (_event: any, config: any) => {
+      ipcRenderer.on("import-url-from-link", (_event: any, config: any) => {
         const rawUrl = config?.url;
         if (!rawUrl || typeof rawUrl !== "string") return;
-        await this.handleURLImport(undefined as any, rawUrl);
-      };
-      ipcRenderer.on("import-url-from-link", this.ipcImportUrlListener);
+        this.handleURLImport(undefined as any, rawUrl);
+      });
     }
     this.resizeHandler = throttle(() => {
-      console.log("resize");
       this.setState({ width: document.body.clientWidth });
     });
     window.addEventListener("resize", this.resizeHandler);
     this.props.handleImportBookFunc(this.getMd5WithBrowser);
   }
   componentWillUnmount() {
-    if (isElectron && this.ipcImportUrlListener) {
-      const { ipcRenderer } = window.require("electron");
-      ipcRenderer.removeListener(
-        "import-url-from-link",
-        this.ipcImportUrlListener
-      );
-      this.ipcImportUrlListener = null;
-    }
     if (this.resizeHandler) {
       window.removeEventListener("resize", this.resizeHandler);
       this.resizeHandler = null;
@@ -366,7 +353,13 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
     });
   };
 
-  private escapeHtml = (value: string) => {
+  decodeHtmlEntities = (value: string) => {
+    if (!value) return "";
+    const doc = new DOMParser().parseFromString(value, "text/html");
+    return doc.documentElement.textContent || value;
+  };
+
+  escapeHtml = (value: string) => {
     return (value || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -375,7 +368,7 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
       .replace(/'/g, "&#039;");
   };
 
-  private makeUrlsAbsolute = (rootDoc: Document, baseUrl: string) => {
+  makeUrlsAbsolute = (rootDoc: Document, baseUrl: string) => {
     const toAbs = (value: string | null) => {
       if (!value) return value;
       if (value.startsWith("data:")) return value;
@@ -403,7 +396,7 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
     });
   };
 
-  private importHtmlFromURL = async (
+  importHtmlFromURL = async (
     url: string,
     urlFileName: string,
     toastId: string
@@ -451,6 +444,7 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
       doc.title ||
       (urlFileName || "book").replace(/\.[^/.]+$/, "") ||
       "book";
+    const decodedTitle = this.decodeHtmlEntities(rawTitle).trim() || "book";
 
     // 2) Prefer extracted content; fallback to body html.
     const extractedContent = extracted?.content || doc.body?.innerHTML || "";
@@ -469,8 +463,8 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
       }
     );
 
-    const safeTitle = this.escapeHtml(rawTitle);
-    const finalHtmlFileName = `${safeTitle}.html`;
+    const safeTitle = this.escapeHtml(decodedTitle);
+    const finalHtmlFileName = `${decodedTitle.replace(/[/\\?%*:|"<>]/g, "-")}.html`;
     const finalHtml = `<!doctype html><html><head><meta charset="utf-8"/><title>${safeTitle}</title></head><body>${sanitizedBody}</body></html>`;
 
     const blob = new Blob([new TextEncoder().encode(finalHtml)], {
@@ -504,17 +498,14 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
   };
 
   // Handle URL import
-  handleURLImport = async (
-    e?: React.MouseEvent,
-    externalUrl?: string
-  ) => {
+  handleURLImport = async (e?: React.MouseEvent, externalUrl?: string) => {
     e?.stopPropagation();
     this.setState({ isMoreOptionsVisible: false });
     const url =
       typeof externalUrl === "string"
         ? externalUrl
         : await vexPromptAsync(
-            this.props.t("Enter book download URL (http/https)"),
+            this.props.t("Enter book download URL or article URL"),
             "https://"
           );
     if (!url || typeof url !== "string") return;
@@ -533,14 +524,7 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
     const toastId = "url-download";
     if (
       !supportedFormats
-        .filter(
-          (item) =>
-            item !== ".html" &&
-            item !== ".xml" &&
-            item !== ".htm" &&
-            item !== ".xhtml" &&
-            item !== ".mhtml"
-        )
+        .filter((item) => item !== ".html" && item !== ".htm")
         .includes(ext)
     ) {
       try {
@@ -624,7 +608,12 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
             await this.getMd5WithBrowser(item);
           }
           this.setState({ importingShelfTitle: "" });
-          await this.props.cloudSyncFunc();
+          if (
+            ConfigService.getReaderConfig("isDisableAutoSync") !== "yes" &&
+            ConfigService.getItem("defaultSyncOption")
+          ) {
+            await this.props.cloudSyncFunc();
+          }
         }}
         accept={supportedFormatsAccept}
         multiple={true}
@@ -753,7 +742,14 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
                             importingShelfTitle: "",
                             isMoreOptionsVisible: false,
                           });
-                          await this.props.cloudSyncFunc();
+                          if (
+                            ConfigService.getReaderConfig(
+                              "isDisableAutoSync"
+                            ) !== "yes" &&
+                            ConfigService.getItem("defaultSyncOption")
+                          ) {
+                            await this.props.cloudSyncFunc();
+                          }
                         }
                       }}
                     >
@@ -799,7 +795,14 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
                             }
                             this.setState({ importingShelfTitle: "" });
                             this.toggleMoreOptions();
-                            await this.props.cloudSyncFunc();
+                            if (
+                              ConfigService.getReaderConfig(
+                                "isDisableAutoSync"
+                              ) !== "yes" &&
+                              ConfigService.getItem("defaultSyncOption")
+                            ) {
+                              await this.props.cloudSyncFunc();
+                            }
                           }}
                         ></input>
                       )}
@@ -890,7 +893,13 @@ class ImportLocal extends React.Component<ImportLocalProps, ImportLocalState> {
                     }
                   }
                   this.setState({ importingShelfTitle: "" });
-                  await this.props.cloudSyncFunc();
+                  if (
+                    ConfigService.getReaderConfig("isDisableAutoSync") !==
+                      "yes" &&
+                    ConfigService.getItem("defaultSyncOption")
+                  ) {
+                    await this.props.cloudSyncFunc();
+                  }
                 }}
               ></div>
             )}
