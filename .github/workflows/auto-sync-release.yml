@@ -80,34 +80,29 @@ jobs:
             echo "our_tag=$our_tag" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Sync upstream to dev
-        if: steps.decide.outputs.should_build == 'true'
-        run: |
-          git checkout dev
-          git rebase upstream/dev || {
-            echo "Rebase failed, attempting merge instead"
-            git rebase --abort
-            git merge upstream/dev --no-edit
-          }
-
-      - name: Preserve fork workflows
+      - name: Merge upstream to dev
         if: steps.decide.outputs.should_build == 'true'
         run: |
           upstream_tag="${{ steps.upstream.outputs.tag }}"
 
-          git reset --soft origin/dev
-          git restore --source=origin/dev --staged --worktree .github/workflows
+          git checkout dev
 
-          if git diff --cached --quiet; then
-            echo "No upstream changes to commit after preserving fork workflows"
+          if git merge-base --is-ancestor upstream/dev HEAD; then
+            echo "dev already contains upstream/dev"
           else
-            git commit -m "Sync upstream $upstream_tag"
+            git merge --no-ff --no-commit upstream/dev || {
+              echo "Merge failed; resolve conflicts manually"
+              git status --short
+              exit 1
+            }
+            git restore --source=HEAD --staged --worktree .github/workflows
+            git commit --allow-empty -m "Merge upstream $upstream_tag"
           fi
 
       - name: Push synced dev
         if: steps.decide.outputs.should_build == 'true'
         run: |
-          git push origin dev --force-with-lease
+          git push origin dev
 
       - name: Create and push release tag
         if: steps.decide.outputs.should_build == 'true'
