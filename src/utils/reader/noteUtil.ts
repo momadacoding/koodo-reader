@@ -5,7 +5,6 @@ import {
   NoteSyncManager,
 } from "../../assets/lib/kookit-extra-browser.min";
 import { getIframeDoc } from "./docUtil";
-import toast from "react-hot-toast";
 import { syncNoteToAcorny } from "./acornySync";
 
 export interface DigestParams {
@@ -13,7 +12,7 @@ export interface DigestParams {
   htmlBook: any;
   chapterDocIndex: number;
   chapter: string;
-  color: number;
+  color: string;
   t: (key: string) => string;
   onNoteClick?: (event: Event) => void;
   onSuccess?: () => void;
@@ -26,7 +25,6 @@ export async function createHighlight(params: DigestParams): Promise<void> {
     chapterDocIndex,
     chapter,
     color,
-    t,
     onNoteClick,
     onSuccess,
   } = params;
@@ -84,7 +82,6 @@ export async function createHighlight(params: DigestParams): Promise<void> {
   );
 
   await DatabaseService.saveRecord(highlight, "notes");
-  toast.success(t("Addition successful"));
   await htmlBook.rendition.createOneNote(highlight, onNoteClick ?? (() => {}));
   let noteSyncManager = new NoteSyncManager(DatabaseService, ConfigService);
   noteSyncManager.syncNote(highlight, bookKey);
