@@ -227,7 +227,7 @@ class PopupNote extends React.Component<PopupNoteProps, PopupNoteState> {
               onKeyDown={(event) => {
                 if (
                   event.key === "Enter" &&
-                  !event.shiftKey &&
+                  (event.ctrlKey || event.metaKey) &&
                   !(event.nativeEvent as any).isComposing
                 ) {
                   event.preventDefault();
