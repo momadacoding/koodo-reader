@@ -126,7 +126,7 @@ class PopupNote extends React.Component<PopupNoteProps, PopupNoteState> {
       }
       let bookKey = this.props.currentBook.key;
       let range = JSON.stringify(
-        await this.props.htmlBook.rendition.getHightlightCoords(
+        await this.props.htmlBook.rendition.getHighlightCoords(
           this.props.chapterDocIndex
         )
       );
@@ -171,7 +171,9 @@ class PopupNote extends React.Component<PopupNoteProps, PopupNoteState> {
         // Auto-sync note to enabled destinations
         let noteSyncManager = new NoteSyncManager(
           DatabaseService,
-          ConfigService
+          ConfigService,
+          window.electronAPI?.fs,
+          window.electronAPI?.path
         );
         noteSyncManager.syncNote(note, bookKey);
         syncNoteToAcorny(
@@ -283,6 +285,7 @@ class PopupNote extends React.Component<PopupNoteProps, PopupNoteState> {
               }}
             >
               <Trans>Confirm</Trans>
+              <span> (CTRL + ↵)</span>
             </span>
           </div>
         </div>

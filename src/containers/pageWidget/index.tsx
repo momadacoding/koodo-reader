@@ -1,6 +1,6 @@
 import { connect } from "react-redux";
 import { stateType } from "../../store";
-import Background from "./component";
+import PageWidget from "./component";
 import {
   handleCurrentChapter,
   handleCurrentChapterIndex,
@@ -16,6 +16,7 @@ const mapStateToProps = (state: stateType) => {
     readerMode: state.reader.readerMode,
     isNavLocked: state.reader.isNavLocked,
     isSettingLocked: state.reader.isSettingLocked,
+    isDockedRight: state.reader.isDockedRight,
     backgroundColor: state.reader.backgroundColor,
     isHideFooter: state.reader.isHideFooter,
     isHideHeader: state.reader.isHideHeader,
@@ -37,4 +38,4 @@ const actionCreator = {
 export default connect(
   mapStateToProps,
   actionCreator
-)(withTranslation()(Background) as any);
+)(withTranslation()(PageWidget) as any);

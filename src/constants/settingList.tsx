@@ -132,8 +132,8 @@ export const noteSyncSettingList = [
     authFields: [
       {
         key: "token",
-        label: "Notion Integration Token",
-        placeholder: "Enter your Notion integration token",
+        label: "Notion Personal Access Token",
+        placeholder: "Enter your Notion personal access token",
       },
       {
         key: "databaseId",
@@ -307,6 +307,26 @@ export const wordSyncSettingList = [
       },
     ],
     authConfigKey: "ankiSyncConfig",
+  },
+  {
+    isElectron: false,
+    title: "Auto sync new words to MaiMemo",
+    desc: "When you look up a word, it will be automatically synced to your MaiMemo notepad",
+    propName: "isEnableMaiMemoSync",
+    requiresAuth: true,
+    authFields: [
+      {
+        key: "accessToken",
+        label: "MaiMemo Access Token",
+        placeholder: "Enter your MaiMemo access token",
+      },
+      {
+        key: "notepadName",
+        label: "MaiMemo Notepad Name",
+        placeholder: "Enter the notepad name",
+      },
+    ],
+    authConfigKey: "maimemoSyncConfig",
   },
 ];
 export const syncSettingList = [
@@ -498,6 +518,11 @@ export const skinList = [
 ];
 
 export const readerSettingList = [
+  {
+    title: "Enable paragraph mode",
+    propName: "isParagraphMode",
+    isPDF: false,
+  },
   {
     title: "Render PDF from even page",
     propName: "isStartFromEven",

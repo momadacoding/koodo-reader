@@ -11,6 +11,8 @@ export interface SettingSwitchProps {
   handleHideHeader: (isHideHeader: boolean) => void;
   t: (title: string) => string;
   handleHideBackground: (isHideBackground: boolean) => void;
+  handleParagraphMode: (isParagraphMode: boolean) => void;
+  handleReadingRuler: (isReadingRuler: boolean) => void;
   handleShowBorder: (isShowPageBorder: boolean) => void;
   handleSetting: (isOpenSetting: boolean) => void;
   handleSettingMode: (mode: string) => void;
@@ -31,12 +33,16 @@ export interface SettingSwitchState {
   isOrphanWidow: boolean;
   isKeepPDFBackground: boolean;
   isBionic: boolean;
+  isParagraphMode: boolean;
   isHideHeader: boolean;
   isShowPageBorder: boolean;
   isCustomBookCSS: boolean;
   customBookCSS: string;
   isWordDefinition: boolean;
   isSeperateStyle: boolean;
+  isReadingRuler: boolean;
+  readingRulerLineHeight: string;
+  readingRulerBackgroundOpacity: string;
   wordDefinitionLang: string;
   currentChineseLevel: string;
   currentJapaneseLevel: string;

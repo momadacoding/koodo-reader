@@ -9,18 +9,56 @@ const {
   dialog,
   powerSaveBlocker,
   nativeTheme: electronNativeTheme,
-  protocol,
   screen,
-  systemPreferences,
+  shell,
+  clipboard,
+  net,
+  session,
 } = require("electron");
 const path = require("path");
+const { pathToFileURL } = require("url");
 const isDev = require("electron-is-dev");
 const Store = require("electron-store");
 const log = require("electron-log/main");
 const os = require("os");
-const { execFile } = require("child_process");
 const store = new Store();
 const fs = require("fs");
+const fsExtra = require("fs-extra");
+const nodeCrypto = require("crypto");
+const yauzl = require("yauzl");
+const tarStream = require("tar-stream");
+const {
+  normalizeArchiveEntryName,
+  ensureEntryInside,
+  ensureTarIndex,
+  extractTarByOffsets,
+} = require("./src/utils/main/tar-index");
+const { runPowerShellScript } = require("./src/utils/main/powershell-util");
+const {
+  buildProxyUrl,
+  checkCloudUrl,
+  testProxyConnection,
+} = require("./src/utils/main/network-util");
+const { backupToPath, restoreFromPath } = require(
+  "./src/utils/main/backup-util"
+);
+const {
+  setDiscordActivity,
+  clearDiscordActivity,
+  destroyDiscordRPC,
+} = require("./src/utils/main/discord-rpc-util");
+const {
+  resolveOcrLang,
+  parseOcrImageInput,
+  writeOcrTempImage,
+  runWindowsOcr,
+  runMacosOcr,
+} = require("./src/utils/main/ocr-util");
+const {
+  getBiometricCapability,
+  promptBiometricAuth,
+} = require("./src/utils/main/biometric-util");
+const { getVoicePlugin } = require("./src/utils/plugins/main/registry");
 const configDir = app.getPath("userData");
 const dirPath = path.join(configDir, "uploads");
 const packageJson = require("./package.json");
@@ -70,270 +108,30 @@ const throttle = (func, wait = RESIZE_THROTTLE_MS) => {
     }
   };
 };
-
-const extractClixmlErrors = (text) => {
-  if (!text) return "";
-  const matches = text.match(
-    /<S S="Error">([^<]*(?:<[^/][^>]*>[^<]*<\/[^>]*>)*[^<]*)<\/S>/g
-  );
-  if (!matches) return text;
-  return matches
-    .map((m) =>
-      m
-        .replace(/<\/?S[^>]*>/g, "")
-        .replace(/<[^>]+>/g, "")
-        .replace(/_x000D__x000A_/g, "\n")
-        .trim()
-    )
-    .filter(Boolean)
-    .join("\n");
-};
-
-const runPowerShellScript = (script, timeout = 30000) => {
-  return new Promise((resolve, reject) => {
-    const encodedCommand = Buffer.from(script, "utf16le").toString("base64");
-    execFile(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Sta",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodedCommand,
-      ],
-      {
-        windowsHide: true,
-        timeout,
-        maxBuffer: 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          const rawMessage = (stderr || stdout || error.message || "").trim();
-          const cleanMessage = extractClixmlErrors(rawMessage) || rawMessage;
-          reject(new Error(cleanMessage));
-          return;
-        }
-        resolve((stdout || "").trim());
-      }
-    );
-  });
-};
-
-const OCR_TEMP_DIR = path.join(configDir, "ocr-tmp");
-
-// macOS OCR 二进制支持的语言（VNRecognizeTextRequest recognitionLanguages）
-const MACOS_OCR_LANGS = new Set([
-  "zh-Hans",
-  "zh-Hant",
-  "en-US",
-  "ja-JP",
-  "ko-KR",
-  "fr-FR",
-]);
-
-// 把渲染进程传入的语言代码映射为各平台可识别的标签
-// key: 应用内统一代码；value: { macos, win }
-const OCR_LANG_MAP = {
-  "zh-CN": { macos: "zh-Hans", win: "zh-Hans-CN" },
-  "zh-SG": { macos: "zh-Hans", win: "zh-Hans-CN" },
-  "zh-TW": { macos: "zh-Hant", win: "zh-Hant-TW" },
-  "zh-HK": { macos: "zh-Hant", win: "zh-Hant-HK" },
-  "zh-Hans": { macos: "zh-Hans", win: "zh-Hans-CN" },
-  "zh-Hant": { macos: "zh-Hant", win: "zh-Hant-TW" },
-  en: { macos: "en-US", win: "en-US" },
-  "en-US": { macos: "en-US", win: "en-US" },
-  "en-GB": { macos: "en-US", win: "en-GB" },
-  ja: { macos: "ja-JP", win: "ja" },
-  "ja-JP": { macos: "ja-JP", win: "ja" },
-  ko: { macos: "ko-KR", win: "ko" },
-  "ko-KR": { macos: "ko-KR", win: "ko" },
-  fr: { macos: "fr-FR", win: "fr" },
-  "fr-FR": { macos: "fr-FR", win: "fr" },
-};
-
-const resolveOcrLang = (lang) => {
-  if (!lang || lang === "auto") return { macos: "auto", win: "auto" };
-  return OCR_LANG_MAP[lang] || { macos: lang, win: lang };
-};
-
-// 从 base64 或 dataURL 中解析出 { buffer, ext }
-const parseOcrImageInput = (input) => {
-  if (typeof input !== "string" || !input) {
-    throw new Error("Invalid image data");
-  }
-  // dataURL: data:image/png;base64,xxxx
-  const dataUrlMatch = input.match(/^data:image\/([a-zA-Z0-9]+);base64,(.+)$/);
-  if (dataUrlMatch) {
-    const ext =
-      dataUrlMatch[1].toLowerCase() === "jpeg"
-        ? "jpg"
-        : dataUrlMatch[1].toLowerCase();
-    return { buffer: Buffer.from(dataUrlMatch[2], "base64"), ext };
-  }
-  // 纯 base64，按 PNG 处理
-  return { buffer: Buffer.from(input, "base64"), ext: "png" };
-};
-
-const writeOcrTempImage = (buffer, ext) => {
-  if (!fs.existsSync(OCR_TEMP_DIR)) {
-    fs.mkdirSync(OCR_TEMP_DIR, { recursive: true });
-  }
-  const fileName = `ocr-${process.pid}-${Date.now()}.${ext}`;
-  const filePath = path.join(OCR_TEMP_DIR, fileName);
-  fs.writeFileSync(filePath, buffer);
-  return filePath;
-};
-
-const cleanWindowsOcrText = (text) => {
-  if (!text) return text;
-  // Windows.Media.Ocr 对中日韩等无词边界的语言按"字"分词，Text 用空格连接，
-  // 导致中文每字之间出现空格。循环去除 CJK 文字/全角标点之间的空格，
-  // 保留英文与数字之间的空格。单次 replace 无法合并连续序列（如"符 号 学"），
-  // 需循环直到无变化。
-  //
-  // CJK 范围用 Unicode 码点表示：
-  //   一-龿   CJK 统一汉字（基本区）
-  //   㐀-䶿   CJK 扩展 A 区
-  //   ぀-ヿ   日文平假名 / 片假名
-  //   가-힯   韩文谚文音节
-  //   　-〿   CJK 符号与标点（全角空格、· 、。 等）
-  //   ＀-￯   全角符号（全角字母数字、（） 等）
-  const cjk =
-    "\\u4e00-\\u9fbf\\u3400-\\u4dbf\\u3040-\\u30ff\\uac00-\\ud7af\\u3000-\\u303f\\uff00-\\uffef";
-  const pattern = new RegExp("([" + cjk + "])\\s+([" + cjk + "])", "gu");
-  let prev;
-  let cur = text;
-  do {
-    prev = cur;
-    cur = cur.replace(pattern, "$1$2");
-  } while (cur !== prev);
-  return cur;
-};
-
-// Windows: 通过 PowerShell 调用 Windows.Media.Ocr (WinRT)
-const runWindowsOcr = (imagePath, winLang) => {
-  // PowerShell 脚本里用单引号包裹路径，需转义内部单引号
-  const escapePsSingle = (s) => s.replace(/'/g, "''");
-  const escapedPath = escapePsSingle(imagePath);
-  const langClause =
-    winLang === "auto"
-      ? "[Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime]::TryCreateFromUserProfileLanguages()"
-      : "$( $__lang = [Windows.Globalization.Language,Windows.Globalization,ContentType=WindowsRuntime]::new('" +
-        escapePsSingle(winLang) +
-        "'); [Windows.Media.Ocr.OcrEngine,Windows.Media.Ocr,ContentType=WindowsRuntime]::TryCreateFromLanguage($__lang) )";
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | ? { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
-function Await($WinRtTask, $ResultType) {
-  $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-  $netTask = $asTask.Invoke($null, @($WinRtTask))
-  $netTask.Wait(-1) | Out-Null
-  $netTask.Result
-}
-function EncodeOut($prefix, $text) {
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
-  Write-Output -NoEnumerate ($prefix + [Convert]::ToBase64String($bytes))
-}
-try {
-  $path = '${escapedPath}'
-  $file = Await ([Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
-  $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-  $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder,Windows.Graphics.Imaging,ContentType=WindowsRuntime]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-  $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-  $engine = ${langClause}
-  if ($null -eq $engine) { Write-Output 'LANGERR'; exit 0 }
-  $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-  EncodeOut 'OK' $result.Text
-} catch {
-  EncodeOut 'ERR' $_.Exception.Message
-  exit 0
-}
-`;
-  return runPowerShellScript(script, 60000).then((text) => {
-    const trimmed = (text || "").trim();
-    if (!trimmed) {
-      throw new Error("Windows OCR returned empty result");
-    }
-    if (trimmed === "LANGERR") {
-      const err = new Error(
-        "Language package not installed! See: https://support.microsoft.com/help/17213"
-      );
-      err.code = "LANG_NOT_INSTALLED";
-      throw err;
-    }
-    if (trimmed.startsWith("ERR")) {
-      const msg = Buffer.from(trimmed.slice(3), "base64")
-        .toString("utf8")
-        .trim();
-      throw new Error(msg || "Windows OCR failed");
-    }
-    if (trimmed.startsWith("OK")) {
-      const b64 = trimmed.slice(2);
-      const raw = b64 ? Buffer.from(b64, "base64").toString("utf8") : "";
-      return cleanWindowsOcrText(raw);
-    }
-    throw new Error("Windows OCR returned unexpected output");
-  });
-};
-
-// macOS: 调用打包的 Vision framework 二进制
-const runMacosOcr = (imagePath, macosLang) => {
-  const arch = process.arch; // arm64 / x64
-  const archName =
-    arch === "arm64" ? "aarch64" : arch === "x64" ? "x86_64" : arch;
-  const binPath = isDev
-    ? path.join(__dirname, "assets/macos/ocr-" + archName + "-apple-darwin")
-    : path.join(
-        process.resourcesPath,
-        "assets/macos/ocr-" + archName + "-apple-darwin"
-      );
-  if (!fs.existsSync(binPath)) {
-    const err = new Error("macOS OCR binary not found: " + binPath);
-    err.code = "BIN_NOT_FOUND";
-    throw err;
-  }
-  return new Promise((resolve, reject) => {
-    execFile(
-      binPath,
-      [imagePath, macosLang],
-      { timeout: 60000, maxBuffer: 10 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const msg = (stderr || error.message || "").trim();
-          const err = new Error(msg || "macOS OCR failed");
-          err.code = "BIN_FAILED";
-          reject(err);
-          return;
-        }
-        resolve((stdout || "").trim());
-      }
-    );
-  });
-};
-
-const getWindowHandleValue = (win) => {
-  if (!win || typeof win.getNativeWindowHandle !== "function") {
-    return "";
+const getFingerprint = async () => {
+  // First, try to get cached fingerprint
+  let deviceUuid = store.get("fingerPrint");
+  if (deviceUuid) {
+    return deviceUuid;
   }
 
+  // Try to get machine ID with additional error handling
   try {
-    const handle = win.getNativeWindowHandle();
-    if (!Buffer.isBuffer(handle) || handle.length === 0) {
-      return "";
+    const { machineIdSync } = require("node-machine-id");
+    let machineId = machineIdSync();
+    if (machineId && typeof machineId === "string" && machineId.length > 0) {
+      // Cache the machine ID for future use
+      store.set("fingerPrint", machineId);
+      return machineId;
     }
-
-    if (handle.length >= 8 && typeof handle.readBigUInt64LE === "function") {
-      return handle.readBigUInt64LE(0).toString();
-    }
-
-    return handle.readUInt32LE(0).toString();
   } catch (error) {
-    console.warn("Failed to resolve native window handle:", error);
-    return "";
+    console.error("Failed to get machine ID:", error);
   }
+
+  // Fallback: generate and cache a UUID
+  let fingerprint = uuidv4().replace(/-/g, "");
+  store.set("fingerPrint", fingerprint);
+  return fingerprint;
 };
 
 const loadUrlInAuxWindow = async (win, url) => {
@@ -367,296 +165,6 @@ const loadUrlInAuxWindow = async (win, url) => {
   await wc.loadURL(url);
 };
 
-const getWindowsHelloScript = (mode, message = "", hwnd = "") => {
-  const escapedMessage = message.replace(/'/g, "''");
-  const escapedHwnd = String(hwnd || "").replace(/'/g, "''");
-  return `
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Runtime.WindowsRuntime
-
-function Invoke-WinRtAsync {
-  param(
-    [Parameter(Mandatory = $true)] $Operation,
-    [Parameter(Mandatory = $true)] [Type[]] $ResultTypes
-  )
-
-  $method = [System.WindowsRuntimeSystemExtensions].GetMethods() |
-    Where-Object {
-      $_.Name -eq 'AsTask' -and
-      $_.IsGenericMethodDefinition -and
-      $_.GetGenericArguments().Count -eq $ResultTypes.Count -and
-      $_.GetParameters().Count -eq 1
-    } |
-    Select-Object -First 1
-
-  if (-not $method) {
-    throw 'Unable to bridge Windows Runtime async operation.'
-  }
-
-  $genericMethod = $method.MakeGenericMethod($ResultTypes)
-  $task = $genericMethod.Invoke($null, @($Operation))
-  return $task.GetAwaiter().GetResult()
-}
-
-function Request-WindowsHelloVerification {
-  param(
-    [Parameter(Mandatory = $true)] [string] $Message,
-    [string] $Hwnd
-  )
-
-  $isWindowInteropSupported = [Environment]::OSVersion.Version.Build -ge 22000 -and -not [string]::IsNullOrWhiteSpace($Hwnd)
-
-  if (-not $isWindowInteropSupported) {
-    return Invoke-WinRtAsync -Operation ($verifier::RequestVerificationAsync($Message)) -ResultTypes @([Windows.Security.Credentials.UI.UserConsentVerificationResult])
-  }
-
-  Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-
-namespace KoodoReaderInterop
-{
-    [ComImport]
-    [Guid("39E050C3-4E74-441A-8DC0-B81104DF949C")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIInspectable)]
-    public interface IUserConsentVerifierInterop
-    {
-        [return: MarshalAs(UnmanagedType.IInspectable)]
-        object RequestVerificationForWindowAsync(
-            IntPtr appWindow,
-            [MarshalAs(UnmanagedType.HString)] string message,
-            [In] ref Guid riid);
-    }
-
-    public static class UserConsentVerifierInteropHelper
-    {
-        public static object RequestVerificationForWindow(object activationFactory, long hwnd, string message, Guid riid)
-        {
-            IntPtr ptr = IntPtr.Zero;
-
-            try
-            {
-                ptr = Marshal.GetIUnknownForObject(activationFactory);
-                var interop = (IUserConsentVerifierInterop)Marshal.GetTypedObjectForIUnknown(ptr, typeof(IUserConsentVerifierInterop));
-                return interop.RequestVerificationForWindowAsync(new IntPtr(hwnd), message, ref riid);
-            }
-            finally
-            {
-                if (ptr != IntPtr.Zero)
-                {
-                    Marshal.Release(ptr);
-                }
-            }
-        }
-    }
-}
-"@
-
-  $activationFactory = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeMarshal]::GetActivationFactory($verifier)
-  $asyncOperationGuid = [Guid]::Parse('fd596ffd-2318-558f-9dbe-d21df43764a5')
-  $operation = [KoodoReaderInterop.UserConsentVerifierInteropHelper]::RequestVerificationForWindow($activationFactory, [Int64]::Parse($Hwnd), $Message, $asyncOperationGuid)
-  return Invoke-WinRtAsync -Operation $operation -ResultTypes @([Windows.Security.Credentials.UI.UserConsentVerificationResult])
-}
-
-$verifier = [Windows.Security.Credentials.UI.UserConsentVerifier, Windows.Security.Credentials.UI, ContentType = WindowsRuntime]
-$availability = Invoke-WinRtAsync -Operation ($verifier::CheckAvailabilityAsync()) -ResultTypes @([Windows.Security.Credentials.UI.UserConsentVerifierAvailability])
-
-if ('${mode}' -eq 'check') {
-  [Console]::Out.Write((@{
-    available = ($availability.ToString() -eq 'Available')
-    status = $availability.ToString()
-  } | ConvertTo-Json -Compress))
-  exit 0
-}
-
-if ($availability.ToString() -ne 'Available') {
-  [Console]::Out.Write((@{
-    success = $false
-    code = 'Unavailable'
-    status = $availability.ToString()
-  } | ConvertTo-Json -Compress))
-  exit 0
-}
-
-try {
-  $result = Request-WindowsHelloVerification -Message '${escapedMessage}' -Hwnd '${escapedHwnd}'
-  [Console]::Out.Write((@{
-    success = ($result.ToString() -eq 'Verified')
-    code = $result.ToString()
-    status = $availability.ToString()
-  } | ConvertTo-Json -Compress))
-} catch {
-  [Console]::Out.Write((@{
-    success = $false
-    code = 'Error'
-    status = $_.Exception.Message
-  } | ConvertTo-Json -Compress))
-}
-`.trim();
-};
-
-const getBiometricCapability = async () => {
-  if (process.platform === "darwin") {
-    const available =
-      typeof systemPreferences.canPromptTouchID === "function" &&
-      systemPreferences.canPromptTouchID();
-    return {
-      available,
-      provider: "Touch ID",
-      platform: process.platform,
-      status: available ? "Available" : "Unavailable",
-    };
-  }
-
-  if (process.platform === "win32") {
-    try {
-      const output = await runPowerShellScript(getWindowsHelloScript("check"));
-      const result = output ? JSON.parse(output) : {};
-      return {
-        available: !!result.available,
-        provider: "Windows Hello",
-        platform: process.platform,
-        status: result.status || "Unavailable",
-      };
-    } catch (error) {
-      return {
-        available: false,
-        provider: "Windows Hello",
-        platform: process.platform,
-        status: "Error",
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }
-
-  return {
-    available: false,
-    provider: "Biometric",
-    platform: process.platform,
-    status: "Unsupported",
-  };
-};
-
-const promptBiometricAuth = async (
-  promptMessage = "Authenticate",
-  owningWindow = null
-) => {
-  if (process.platform === "darwin") {
-    const available =
-      typeof systemPreferences.canPromptTouchID === "function" &&
-      systemPreferences.canPromptTouchID();
-    if (!available) {
-      return {
-        success: false,
-        code: "Unavailable",
-        provider: "Touch ID",
-      };
-    }
-
-    try {
-      await systemPreferences.promptTouchID(promptMessage);
-      return {
-        success: true,
-        code: "Verified",
-        provider: "Touch ID",
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        success: false,
-        code: /cancel/i.test(message) ? "Canceled" : "Failed",
-        provider: "Touch ID",
-      };
-    }
-  }
-
-  if (process.platform === "win32") {
-    try {
-      const hwnd = getWindowHandleValue(owningWindow);
-      const output = await runPowerShellScript(
-        getWindowsHelloScript("verify", promptMessage, hwnd),
-        120000
-      );
-      const result = output ? JSON.parse(output) : {};
-      return {
-        success: !!result.success,
-        code:
-          result.code === "Unavailable" && result.status
-            ? result.status
-            : result.code || "Error",
-        provider: "Windows Hello",
-      };
-    } catch (error) {
-      console.error("Biometric verification error:", error.message);
-      return {
-        success: false,
-        code: "Error",
-        provider: "Windows Hello",
-      };
-    }
-  }
-
-  return {
-    success: false,
-    code: "Unsupported",
-    provider: "Biometric",
-  };
-};
-
-// Discord Rich Presence setup
-let discordRPCClient = null;
-let discordRPCReady = false;
-let discordRPCConnecting = false;
-const DISCORD_CLIENT_ID = "1490863275074781305"; // Koodo Reader Discord App ID
-
-function initDiscordRPC() {
-  if (discordRPCConnecting || discordRPCReady) return Promise.resolve();
-  discordRPCConnecting = true;
-  return new Promise((resolve) => {
-    try {
-      const DiscordRPC = require("discord-rpc");
-      DiscordRPC.register(DISCORD_CLIENT_ID);
-      const client = new DiscordRPC.Client({ transport: "ipc" });
-      client.on("ready", () => {
-        console.info("Discord RPC connected");
-        discordRPCClient = client;
-        discordRPCReady = true;
-        discordRPCConnecting = false;
-        resolve();
-      });
-      client.login({ clientId: DISCORD_CLIENT_ID }).catch((err) => {
-        console.warn("Discord RPC login failed:", err.message);
-        discordRPCClient = null;
-        discordRPCReady = false;
-        discordRPCConnecting = false;
-        resolve();
-      });
-    } catch (e) {
-      console.warn("Discord RPC init failed:", e.message);
-      discordRPCClient = null;
-      discordRPCReady = false;
-      discordRPCConnecting = false;
-      resolve();
-    }
-  });
-}
-function destroyDiscordRPC() {
-  if (discordRPCClient) {
-    try {
-      discordRPCClient.destroy();
-    } catch (_) {}
-    discordRPCClient = null;
-  }
-  discordRPCReady = false;
-  discordRPCConnecting = false;
-}
-function buildProgressBar(percentage) {
-  const total = 10;
-  const filled = Math.round((percentage / 100) * total);
-  const empty = total - filled;
-  return "▓".repeat(filled) + "░".repeat(empty);
-}
 const singleInstance = app.requestSingleInstanceLock();
 var filePath = null;
 var pendingDeepLink = null;
@@ -686,14 +194,15 @@ let options = {
   minWidth: 300,
   minHeight: 100,
   webPreferences: {
-    webSecurity: false,
-    nodeIntegration: true,
-    contextIsolation: false,
+    webSecurity: !isDev,
+    nodeIntegration: false,
+    contextIsolation: true,
+    preload: path.join(__dirname, "preload.js"),
     nativeWindowOpen: true,
     nodeIntegrationInSubFrames: false,
     allowRunningInsecureContent: false,
-    enableRemoteModule: true,
-    sandbox: false,
+    enableRemoteModule: false,
+    sandbox: true,
   },
 };
 const Database = require("better-sqlite3");
@@ -803,6 +312,51 @@ const applyNativeThemeSource = (appSkin) => {
   return getNativeDarkColorStatus();
 };
 applyNativeThemeSource(store.get("appSkin"));
+const applyProxyToSession = async () => {
+  const { session } = require("electron");
+  const http = require("http");
+  const https = require("https");
+  const config = store.get("proxyConfig");
+  const defaultSession = session.defaultSession;
+  const isEnabled =
+    config && config.type !== "none" && config.enabled !== false && config.host;
+  if (!isEnabled) {
+    await defaultSession.setProxy({ mode: "direct" });
+    https.globalAgent = new https.Agent();
+    http.globalAgent = new http.Agent();
+    return;
+  }
+  const proxyUrl = buildProxyUrl(config);
+  let agent = null;
+  try {
+    if (config.type === "socks5") {
+      const { SocksProxyAgent } = require("socks-proxy-agent");
+      agent = new SocksProxyAgent(proxyUrl);
+    } else {
+      const { HttpsProxyAgent } = require("https-proxy-agent");
+      agent = new HttpsProxyAgent(proxyUrl);
+    }
+  } catch (error) {
+    agent = null;
+  }
+  const authentication = config.username
+    ? `${encodeURIComponent(config.username)}:${encodeURIComponent(config.password || "")}@`
+    : "";
+  if (config.type === "http") {
+    const proxyAddress = `${authentication}${config.host}:${config.port}`;
+    await defaultSession.setProxy({
+      proxyRules: `http=${proxyAddress};https=${proxyAddress}`,
+    });
+  } else if (config.type === "socks5") {
+    await defaultSession.setProxy({
+      proxyRules: `socks5://${config.host}:${config.port}`,
+    });
+  }
+  if (agent) {
+    https.globalAgent = agent;
+    http.globalAgent = agent;
+  }
+};
 // Simple encryption function
 const encrypt = (text, key) => {
   let result = "";
@@ -967,13 +521,209 @@ const createMainWin = () => {
       mainView.webContents.focus();
     }
   });
-  mainWin.webContents.on(
-    "console-message",
-    (event, level, message, line, sourceId) => {
-      console.log(`[Renderer Console] Message: ${message}`);
-    }
-  );
+  mainWin.webContents.on("console-message", (_event, level, message) => {
+    const lvl =
+      { 0: "info", 1: "info", 2: "warn", 3: "error" }[level] || "info";
+    log[lvl](`[Renderer] ${message}`);
+  });
   //cancel-download-app
+  const normalizeFileData = (value) => {
+    if (value instanceof Uint8Array) return Buffer.from(value);
+    if (value instanceof ArrayBuffer) return Buffer.from(value);
+    if (ArrayBuffer.isView(value)) {
+      return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+    }
+    return value;
+  };
+  const runFileCommand = (args) => {
+    if (!args || typeof args.operation !== "string") {
+      throw new TypeError("Invalid file operation");
+    }
+    const operation = args.operation;
+    const filePath = args.path === undefined ? undefined : args.path;
+    switch (operation) {
+      case "exists":
+        return fs.existsSync(filePath);
+      case "mkdir":
+        return fs.mkdirSync(filePath, args.options || {});
+      case "read":
+        return fs.readFileSync(filePath, args.options);
+      case "write":
+        return fs.writeFileSync(
+          filePath,
+          normalizeFileData(args.data),
+          args.options
+        );
+      case "append":
+        return fs.appendFileSync(
+          filePath,
+          normalizeFileData(args.data),
+          args.options
+        );
+      case "readdir": {
+        const entries = fs.readdirSync(filePath, args.options || {});
+        return args.options && args.options.withFileTypes
+          ? entries.map((entry) => ({
+              name: entry.name,
+              isFile: entry.isFile(),
+              isDirectory: entry.isDirectory(),
+            }))
+          : entries;
+      }
+      case "stat": {
+        const stat = fs.statSync(filePath);
+        return {
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          isFile: stat.isFile(),
+          isDirectory: stat.isDirectory(),
+        };
+      }
+      case "unlink":
+        return fs.unlinkSync(filePath);
+      case "copyFile":
+        return fs.copyFileSync(args.source, args.destination);
+      case "rename":
+        return fs.renameSync(args.source, args.destination);
+      case "rm":
+        return fs.rmSync(filePath, args.options || {});
+      case "emptyDir":
+        return fsExtra.emptyDirSync(filePath);
+      case "copy":
+        return fsExtra.copy(args.source, args.destination);
+      default:
+        throw new Error(`Unsupported file operation: ${operation}`);
+    }
+  };
+  ipcMain.on("file-command-sync", (event, args) => {
+    try {
+      event.returnValue = { ok: true, value: runFileCommand(args) };
+    } catch (error) {
+      event.returnValue = {
+        ok: false,
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          code:
+            error && typeof error.code === "string" ? error.code : undefined,
+        },
+      };
+    }
+  });
+  ipcMain.handle("file-command", async (event, args) => runFileCommand(args));
+  ipcMain.on("node-command-sync", (event, args) => {
+    try {
+      if (!args || typeof args.operation !== "string") {
+        throw new TypeError("Invalid Node operation");
+      }
+      const stringValue = (value) => {
+        if (typeof value !== "string") {
+          throw new TypeError("Invalid string argument");
+        }
+        return value;
+      };
+      const stringArgs = (values) => {
+        if (
+          !Array.isArray(values) ||
+          values.some((value) => typeof value !== "string")
+        ) {
+          throw new TypeError("Invalid string arguments");
+        }
+        return values;
+      };
+      let value;
+      switch (args.operation) {
+        case "path-join":
+          value = path.join(...stringArgs(args.values));
+          break;
+        case "path-dirname":
+          value = path.dirname(stringValue(args.value));
+          break;
+        case "path-basename":
+          value = path.basename(stringValue(args.value), args.suffix);
+          break;
+        case "path-extname":
+          value = path.extname(stringValue(args.value));
+          break;
+        case "path-resolve":
+          value = path.resolve(...stringArgs(args.values));
+          break;
+        case "path-posix-join":
+          value = path.posix.join(...stringArgs(args.values));
+          break;
+        case "os-homedir":
+          value = os.homedir();
+          break;
+        case "crypto-md5":
+          value = nodeCrypto
+            .createHash("md5")
+            .update(normalizeFileData(args.data))
+            .digest("hex");
+          break;
+        default:
+          throw new Error(`Unsupported Node operation: ${args.operation}`);
+      }
+      event.returnValue = { ok: true, value };
+    } catch (error) {
+      event.returnValue = {
+        ok: false,
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          code:
+            error && typeof error.code === "string" ? error.code : undefined,
+        },
+      };
+    }
+  });
+  ipcMain.handle("open-external", (event, url) => {
+    if (typeof url !== "string" || !/^https?:|^mailto:/i.test(url)) {
+      throw new TypeError("Invalid external URL");
+    }
+    return shell.openExternal(url);
+  });
+  ipcMain.on("clipboard-read-text-sync", (event) => {
+    event.returnValue = clipboard.readText();
+  });
+  ipcMain.handle("dict-lookup", (event, args) => {
+    const filePath = args && args.filePath;
+    if (typeof (args && args.word) !== "string")
+      throw new TypeError("Invalid dictionary word");
+    const { MDX } = require("js-mdict");
+    const result = new MDX(filePath).lookup(args.word);
+    return result &&
+      result.definition !== undefined &&
+      result.definition !== null
+      ? String(result.definition)
+      : "";
+  });
+  ipcMain.handle("partial-md5", (event, filePath) => {
+    const validatedPath = filePath;
+    const hash = nodeCrypto.createHash("md5");
+    const fd = fs.openSync(validatedPath, "r");
+    try {
+      const buffer = Buffer.alloc(1024);
+      for (let i = -1; i <= 10; i++) {
+        const position = 1024 << (2 * i);
+        const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
+        if (!bytesRead) break;
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+      return hash.digest("hex");
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+  ipcMain.handle("crypto-file-md5", (event, filePath) => {
+    if (typeof filePath !== "string" || !filePath) {
+      throw new TypeError("Invalid file path");
+    }
+    return new Promise((resolve, reject) => {
+      const hash = nodeCrypto.createHash("md5");
+      const stream = fs.createReadStream(filePath);
+      stream.on("error", reject);
+      stream.on("data", (chunk) => hash.update(chunk));
+      stream.on("end", () => resolve(hash.digest("hex")));
+    });
+  });
   ipcMain.handle("cancel-download-app", (event, arg) => {
     // Implement cancellation logic here
     // Note: In this example, we are not keeping a reference to the request,
@@ -986,39 +736,10 @@ const createMainWin = () => {
   });
   // Discord RPC handlers
   ipcMain.handle("discord-rpc-update", async (event, config) => {
-    const { bookTitle, author, percentage } = config;
-    if (!discordRPCReady) {
-      await initDiscordRPC();
-    }
-    if (!discordRPCClient || !discordRPCReady) return;
-    try {
-      const progressBar = buildProgressBar(percentage);
-      await discordRPCClient.setActivity({
-        details: bookTitle,
-        state: `${progressBar} ${percentage}%  |  by ${author}`,
-        largeImageKey: "koodo_reader_logo",
-        largeImageText: "Koodo Reader",
-        startTimestamp: Date.now(),
-        instance: false,
-        buttons: [
-          {
-            label: "Get Koodo Reader",
-            url: "https://koodoreader.com",
-          },
-        ],
-      });
-    } catch (e) {
-      console.warn("Failed to set Discord activity:", e.message);
-    }
+    await setDiscordActivity(config);
   });
   ipcMain.handle("discord-rpc-clear", async (event) => {
-    if (discordRPCClient) {
-      try {
-        await discordRPCClient.clearActivity();
-      } catch (e) {
-        console.warn("Failed to clear Discord activity:", e.message);
-      }
-    }
+    await clearDiscordActivity();
   });
   ipcMain.handle("update-win-app", (event, config) => {
     let fileName = `koodo-reader-installer.exe`;
@@ -1107,6 +828,14 @@ const createMainWin = () => {
     }
     if (isAutoFullscreen === "yes" || isAutoMaximize === "yes") {
       readerWindow = new BrowserWindow(options);
+      readerWindow.webContents.on(
+        "console-message",
+        (_event, level, message) => {
+          const lvl =
+            { 0: "info", 1: "info", 2: "warn", 3: "error" }[level] || "info";
+          log[lvl](`[Renderer] ${message}`);
+        }
+      );
       readerWindow.loadURL(url);
       if (isAutoFullscreen === "yes") {
         readerWindow.setFullScreen(true);
@@ -1131,6 +860,14 @@ const createMainWin = () => {
         hasShadow: isMergeWord === "yes" ? false : true,
         transparent: isMergeWord === "yes" ? true : false,
       });
+      readerWindow.webContents.on(
+        "console-message",
+        (_event, level, message) => {
+          const lvl =
+            { 0: "info", 1: "info", 2: "warn", 3: "error" }[level] || "info";
+          log[lvl](`[Renderer] ${message}`);
+        }
+      );
       readerWindow.loadURL(url);
       // readerWindow.webContents.openDevTools();
     }
@@ -1181,13 +918,7 @@ const createMainWin = () => {
       if (mainWin && !mainWin.isDestroyed()) {
         mainWin.webContents.send("reading-finished", {});
       }
-      if (discordRPCClient) {
-        try {
-          discordRPCClient.clearActivity();
-        } catch (e) {
-          console.warn("Failed to clear Discord activity:", e.message);
-        }
-      }
+      clearDiscordActivity();
     });
     // Renderer finished flushing reading-time data — proceed with actual close
     ipcMain.once("reader-close-ready", () => {
@@ -1200,11 +931,46 @@ const createMainWin = () => {
     event.returnValue = "success";
   });
   ipcMain.handle("generate-tts", async (event, voiceConfig) => {
-    let { text, speed, plugin, config } = voiceConfig;
-    let voiceFunc = plugin.script;
-    // eslint-disable-next-line no-eval
-    eval(voiceFunc);
-    return global.getAudioPath(text, speed, dirPath, config);
+    const { text, speed, pluginKey, config } = voiceConfig || {};
+    const plugin = getVoicePlugin(pluginKey);
+    if (
+      !plugin ||
+      typeof text !== "string" ||
+      typeof speed !== "number" ||
+      !Number.isFinite(speed) ||
+      !config ||
+      typeof config !== "object" ||
+      Array.isArray(config)
+    ) {
+      throw new Error("Invalid TTS plugin request");
+    }
+    const audioPath = await plugin.getAudioPath(text, speed, dirPath, config);
+    if (
+      typeof audioPath === "string" &&
+      path.isAbsolute(audioPath) &&
+      fs.existsSync(audioPath)
+    ) {
+      return pathToFileURL(audioPath).toString();
+    }
+    return audioPath;
+  });
+  ipcMain.handle("get-tts-voices", async (event, request) => {
+    const { pluginKey, config } = request || {};
+    const plugin = getVoicePlugin(pluginKey);
+    if (
+      !plugin ||
+      typeof plugin.getTTSVoice !== "function" ||
+      !config ||
+      typeof config !== "object" ||
+      Array.isArray(config)
+    ) {
+      throw new Error("Invalid TTS voice request");
+    }
+    const voices = await plugin.getTTSVoice(config);
+    if (!Array.isArray(voices)) {
+      throw new Error("Invalid TTS voice list");
+    }
+    return voices;
   });
   ipcMain.handle("cloud-upload", async (event, config) => {
     let syncUtil = await getSyncUtil(config, config.isUseCache);
@@ -1314,9 +1080,7 @@ const createMainWin = () => {
     return result.filePaths[0];
   });
   ipcMain.handle("encrypt-data", async (event, config) => {
-    const { TokenService } =
-      await import("./src/assets/lib/kookit-extra.min.mjs");
-    let fingerprint = await TokenService.getFingerprint();
+    let fingerprint = await getFingerprint();
     let encrypted = encrypt(config.token, fingerprint);
     store.set("encryptedToken", encrypted);
     return "pong";
@@ -1324,9 +1088,7 @@ const createMainWin = () => {
   ipcMain.handle("decrypt-data", async (event) => {
     let encrypted = store.get("encryptedToken");
     if (!encrypted) return "";
-    const { TokenService } =
-      await import("./src/assets/lib/kookit-extra.min.mjs");
-    let fingerprint = await TokenService.getFingerprint();
+    let fingerprint = await getFingerprint();
     let decrypted = decrypt(encrypted, fingerprint);
     if (decrypted.startsWith("{") && decrypted.endsWith("}")) {
       return decrypted;
@@ -1344,75 +1106,50 @@ const createMainWin = () => {
     }
   });
   ipcMain.handle("check-cloud-url", async (event, config) => {
-    const https = require("https");
-    const http = require("http");
-    const { URL } = require("url");
     const { url } = config;
-    return new Promise((resolve) => {
-      let parsedUrl;
-      try {
-        parsedUrl = new URL(url);
-      } catch (e) {
-        return resolve({ ok: false, reason: "invalid_url", detail: e.message });
+    return checkCloudUrl(url);
+  });
+  ipcMain.handle("get-proxy-config", async () => {
+    const config = store.get("proxyConfig") || {
+      enabled: false,
+      type: "none",
+      host: "",
+      port: 0,
+      username: "",
+      password: "",
+    };
+    return config;
+  });
+  ipcMain.handle("set-proxy-config", async (event, config) => {
+    const { enabled, type, host, port, username, password } = config || {};
+    const validTypes = ["none", "http", "socks5"];
+    if (!validTypes.includes(type)) {
+      return { ok: false, reason: "invalid_input" };
+    }
+    if (type !== "none") {
+      if (!host || typeof host !== "string" || host.includes("://")) {
+        return { ok: false, reason: "invalid_input" };
       }
-      const isHttps = parsedUrl.protocol === "https:";
-      const lib = isHttps ? https : http;
-      const port = parsedUrl.port
-        ? parseInt(parsedUrl.port)
-        : isHttps
-          ? 443
-          : 80;
-      const options = {
-        hostname: parsedUrl.hostname,
-        port,
-        path: parsedUrl.pathname || "/",
-        method: "HEAD",
-        timeout: 8000,
-        rejectUnauthorized: true,
-      };
-      const req = lib.request(options, (res) => {
-        resolve({
-          ok: true,
-          status: res.statusCode,
-          detail: `HTTP ${res.statusCode}`,
-        });
-      });
-      req.on("timeout", () => {
-        req.destroy();
-        resolve({
-          ok: false,
-          reason: "timeout",
-          detail: `Connection to ${parsedUrl.hostname}:${port} timed out after 8s`,
-        });
-      });
-      req.on("error", (err) => {
-        let reason = "unknown";
-        if (err.code === "ENOTFOUND") {
-          reason = "dns_failed";
-        } else if (err.code === "ECONNREFUSED") {
-          reason = "connection_refused";
-        } else if (err.code === "ECONNRESET") {
-          reason = "connection_reset";
-        } else if (err.code === "ETIMEDOUT") {
-          reason = "timeout";
-        } else if (
-          err.code === "CERT_HAS_EXPIRED" ||
-          err.code === "ERR_TLS_CERT_ALTNAME_INVALID" ||
-          err.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE"
-        ) {
-          reason = "ssl_error";
-        } else if (err.message && err.message.includes("SSL")) {
-          reason = "ssl_error";
-        }
-        resolve({
-          ok: false,
-          reason,
-          code: err.code || "",
-          detail: err.message,
-        });
-      });
-      req.end();
-    });
+      const portNumber = parseInt(port);
+      if (isNaN(portNumber) || portNumber < 1 || portNumber > 65535) {
+        return { ok: false, reason: "invalid_input" };
+      }
+    }
+    const finalEnabled = type === "none" ? false : !!enabled;
+    const configToStore = {
+      enabled: finalEnabled,
+      type,
+      host: type === "none" ? "" : host,
+      port: type === "none" ? 0 : parseInt(port),
+      username: type === "none" ? "" : username || "",
+      password: type === "none" ? "" : password || "",
+    };
+    store.set("proxyConfig", configToStore);
+    await applyProxyToSession();
+    return { ok: true };
+  });
+  ipcMain.handle("test-proxy-connection", async (event, config) => {
+    return testProxyConnection(config);
   });
   ipcMain.handle("get-mac", async (event, config) => {
     const { machineIdSync } = require("node-machine-id");
@@ -1420,9 +1157,6 @@ const createMainWin = () => {
   });
   ipcMain.handle("get-device-name", async () => {
     return os.hostname() || "";
-  });
-  ipcMain.handle("get-store-value", async (event, config) => {
-    return store.get(config.key);
   });
   ipcMain.handle("get-biometric-capability", async () => {
     return await getBiometricCapability();
@@ -1565,6 +1299,233 @@ const createMainWin = () => {
     }
     db.close();
   });
+  // 流式打包备份：遍历 dataPath 下的固定目录与配置文件，
+  // 用 yazl 逐文件 addFile 直接写入目标 zip，避免将整库读入内存。
+  ipcMain.handle("backup-path", async (event, config) => {
+    return backupToPath(config, (percent) => {
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send("backup-progress", { percent });
+      }
+    });
+  });
+  // 流式解压恢复：restoreFromPath 直接流式写盘资产文件，config 类文件
+  // 回传渲染进程处理（.db 经 sql.js 合并，json 写入 ConfigService）。
+  ipcMain.handle("restore-path", async (event, config) => {
+    return restoreFromPath(config, (percent) => {
+      if (mainWin && !mainWin.isDestroyed()) {
+        mainWin.webContents.send("restore-progress", { percent });
+      }
+    });
+  });
+  // ---- Comic 压缩包（CBZ / CBT / CBR 等）按需解压 ----
+  // list-*-file：列出压缩包内的条目名；*-file：把指定的条目按需解压到
+  // dirPath/comic 目录，返回解压后的绝对路径列表。条目路径统一做穿越校验。
+  const assertExistingArchiveFile = (config, label) => {
+    const filePath = config && config.filePath;
+    if (typeof filePath !== "string" || !filePath) {
+      throw new TypeError(`Invalid ${label} path`);
+    }
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      throw new Error(`${label} not found: ${filePath}`);
+    }
+    return filePath;
+  };
+  const parseArchiveEntries = (entries) => {
+    if (entries === undefined || entries === null) return null;
+    if (!Array.isArray(entries) || entries.some((e) => typeof e !== "string")) {
+      throw new TypeError("Invalid entries: expected an array of entry names");
+    }
+    return new Set(entries.map(normalizeArchiveEntryName));
+  };
+  ipcMain.handle("list-zip-file", async (event, config) => {
+    const filePath = assertExistingArchiveFile(config, "zip file");
+    return new Promise((resolve, reject) => {
+      const names = [];
+      yauzl.open(
+        filePath,
+        { lazyEntries: true, autoClose: true },
+        (err, zipfile) => {
+          if (err) return reject(err);
+          zipfile.on("error", reject);
+          zipfile.on("entry", (entry) => {
+            if (!/[/\\]$/.test(entry.fileName)) {
+              const entryPath = normalizeArchiveEntryName(entry.fileName);
+              names.push({
+                entryPath,
+                size: entry.uncompressedSize ?? 0,
+                fileName: path.posix.basename(entryPath),
+              });
+            }
+            zipfile.readEntry();
+          });
+          zipfile.on("end", () => resolve(names));
+          zipfile.readEntry();
+        }
+      );
+    });
+  });
+  ipcMain.handle("unzip-file", async (event, config) => {
+    const filePath = assertExistingArchiveFile(config, "zip file");
+    const wanted = parseArchiveEntries(config && config.entries);
+    const baseDir = path.join(dirPath, "comic");
+    fs.mkdirSync(baseDir, { recursive: true });
+    return new Promise((resolve, reject) => {
+      const results = [];
+      const fail = (err) => reject(err);
+      yauzl.open(
+        filePath,
+        { lazyEntries: true, autoClose: true },
+        (err, zipfile) => {
+          if (err) return fail(err);
+          zipfile.on("error", fail);
+          zipfile.on("end", () => resolve(results));
+          const advance = () => zipfile.readEntry();
+          zipfile.on("entry", (entry) => {
+            const name = normalizeArchiveEntryName(entry.fileName);
+            const isDir = /[/\\]$/.test(entry.fileName);
+            const matches = !wanted || wanted.has(name);
+            if (isDir) {
+              if (matches) {
+                try {
+                  fs.mkdirSync(ensureEntryInside(baseDir, name), {
+                    recursive: true,
+                  });
+                } catch (e) {
+                  return fail(e);
+                }
+              }
+              advance();
+              return;
+            }
+            if (matches) {
+              zipfile.openReadStream(entry, (openErr, readStream) => {
+                if (openErr) return fail(openErr);
+                let dest;
+                try {
+                  dest = ensureEntryInside(baseDir, name);
+                  fs.mkdirSync(path.dirname(dest), { recursive: true });
+                } catch (e) {
+                  return fail(e);
+                }
+                const output = fs.createWriteStream(dest);
+                output.on("error", fail);
+                readStream.on("error", fail);
+                output.on("close", () => {
+                  results.push(dest);
+                  advance();
+                });
+                readStream.pipe(output);
+              });
+            } else {
+              advance();
+            }
+          });
+          zipfile.readEntry();
+        }
+      );
+    });
+  });
+  ipcMain.handle("list-tar-file", async (event, config) => {
+    const filePath = assertExistingArchiveFile(config, "tar file");
+    const index = await ensureTarIndex(filePath);
+    if (index.ok) return index.list;
+    return new Promise((resolve, reject) => {
+      const names = [];
+      const extract = tarStream.extract();
+      extract.on("error", reject);
+      extract.on("finish", () => resolve(names));
+      extract.on("entry", (header, stream, next) => {
+        if (header.type === "file") {
+          const entryPath = normalizeArchiveEntryName(header.name);
+          names.push({
+            entryPath,
+            size: header.size ?? 0,
+            fileName: path.posix.basename(entryPath),
+          });
+        }
+        stream.resume();
+        stream.on("end", next);
+      });
+      fs.createReadStream(filePath).on("error", reject).pipe(extract);
+    });
+  });
+  ipcMain.handle("untar-file", async (event, config) => {
+    const filePath = assertExistingArchiveFile(config, "tar file");
+    const wanted = parseArchiveEntries(config && config.entries);
+    const baseDir = path.join(dirPath, "comic");
+    fs.mkdirSync(baseDir, { recursive: true });
+    try {
+      const index = await ensureTarIndex(filePath);
+      if (index.ok) {
+        const extracted = await extractTarByOffsets(
+          filePath,
+          index,
+          wanted,
+          baseDir
+        );
+        if (extracted) return extracted;
+      }
+    } catch (e) {
+      console.error("tar offset extract failed, fallback to stream:", e);
+    }
+    return new Promise((resolve, reject) => {
+      const results = [];
+      let settled = false;
+      const fail = (err) => {
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
+      };
+      const extract = tarStream.extract();
+      extract.on("error", fail);
+      extract.on("finish", () => {
+        if (!settled) {
+          settled = true;
+          resolve(results);
+        }
+      });
+      extract.on("entry", (header, stream, next) => {
+        const name = normalizeArchiveEntryName(header.name);
+        const matches = !wanted || wanted.has(name);
+        if (header.type === "directory") {
+          if (matches) {
+            try {
+              fs.mkdirSync(ensureEntryInside(baseDir, name), {
+                recursive: true,
+              });
+            } catch (e) {
+              return fail(e);
+            }
+          }
+          stream.resume();
+          stream.on("end", next);
+          return;
+        }
+        if (header.type === "file" && matches) {
+          let dest;
+          try {
+            dest = ensureEntryInside(baseDir, name);
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+          } catch (e) {
+            return fail(e);
+          }
+          const output = fs.createWriteStream(dest);
+          output.on("error", fail);
+          stream.on("error", fail);
+          output.on("close", () => {
+            results.push(dest);
+            next();
+          });
+          stream.pipe(output);
+          return;
+        }
+        stream.resume();
+        stream.on("end", next);
+      });
+      fs.createReadStream(filePath).on("error", fail).pipe(extract);
+    });
+  });
   ipcMain.handle("set-always-on-top", async (event, config) => {
     store.set("isAlwaysOnTop", config.isAlwaysOnTop);
     if (mainWin && !mainWin.isDestroyed()) {
@@ -1696,7 +1657,7 @@ const createMainWin = () => {
           ...options.webPreferences,
           nodeIntegration: false,
           contextIsolation: true,
-          preload: path.join(__dirname, "preload.js"),
+          preload: path.join(__dirname, "chat-preload.js"),
         },
       });
       chatWindow.loadURL(config.url);
@@ -1724,6 +1685,11 @@ const createMainWin = () => {
       let { width, height } = mainWin.getContentBounds();
       mainView.setBounds({ x: 0, y: 0, width: width, height: height });
       mainView.webContents.loadURL(config.url);
+      mainView.webContents.on("console-message", (_event, level, message) => {
+        const lvl =
+          { 0: "info", 1: "info", 2: "warn", 3: "error" }[level] || "info";
+        log[lvl](`[Renderer] ${message}`);
+      });
     }
   });
   ipcMain.handle("reload-tab", (event, config) => {
@@ -1743,13 +1709,7 @@ const createMainWin = () => {
         if (mainWin && mainView) {
           mainWin.contentView.removeChildView(mainView);
         }
-        if (discordRPCClient) {
-          try {
-            discordRPCClient.clearActivity();
-          } catch (e) {
-            console.warn("Failed to clear Discord activity:", e.message);
-          }
-        }
+        clearDiscordActivity();
         resolve(undefined);
       };
 
@@ -1852,7 +1812,14 @@ const createMainWin = () => {
       if (store.get("isAlwaysOnTop") === "yes") {
         readerWindow.setAlwaysOnTop(true);
       }
-
+      readerWindow.webContents.on(
+        "console-message",
+        (_event, level, message) => {
+          const lvl =
+            { 0: "info", 1: "info", 2: "warn", 3: "error" }[level] || "info";
+          log[lvl](`[Renderer] ${message}`);
+        }
+      );
       readerWindow.loadURL(store.get("url"));
       readerWindowReadyToClose = false;
       readerWindow.on("close", (event) => {
@@ -1896,13 +1863,7 @@ const createMainWin = () => {
         if (mainWin && !mainWin.isDestroyed()) {
           mainWin.webContents.send("reading-finished", {});
         }
-        if (discordRPCClient) {
-          try {
-            discordRPCClient.clearActivity();
-          } catch (e) {
-            console.warn("Failed to clear Discord activity:", e.message);
-          }
-        }
+        clearDiscordActivity();
       });
       // Renderer finished flushing reading-time data — proceed with actual close
       ipcMain.once("reader-close-ready", () => {
@@ -1937,9 +1898,6 @@ const createMainWin = () => {
   });
   ipcMain.handle("set-native-theme-source", (event, appSkin) => {
     return applyNativeThemeSource(appSkin);
-  });
-  ipcMain.on("check-main-open", (event, arg) => {
-    event.returnValue = mainWin ? true : false;
   });
   ipcMain.on("get-file-data", function (event) {
     if (fs.existsSync(path.join(dirPath, "log.json"))) {
@@ -2012,7 +1970,40 @@ const createMainWin = () => {
   });
 };
 
-app.on("ready", () => {
+const applyCorsToRendererRequests = () => {
+  const filter = {
+    urls: ["http://*/*", "https://*/*"],
+  };
+  session.defaultSession.webRequest.onHeadersReceived(
+    filter,
+    (details, callback) => {
+      const responseHeaders = { ...details.responseHeaders };
+      const corsHeaders = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods":
+          "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+        "Access-Control-Allow-Headers": "*, Authorization",
+        "Access-Control-Expose-Headers": "*",
+      };
+      if (details.method === "OPTIONS") {
+        corsHeaders["Access-Control-Max-Age"] = "86400";
+      }
+      for (const [name, value] of Object.entries(corsHeaders)) {
+        for (const existingName of Object.keys(responseHeaders)) {
+          if (existingName.toLowerCase() === name.toLowerCase()) {
+            delete responseHeaders[existingName];
+          }
+        }
+        responseHeaders[name] = [value];
+      }
+      callback({ responseHeaders });
+    }
+  );
+};
+
+app.on("ready", async () => {
+  applyCorsToRendererRequests();
+  await applyProxyToSession();
   createMainWin();
 });
 app.on("before-quit", () => {

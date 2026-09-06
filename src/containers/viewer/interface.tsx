@@ -14,7 +14,10 @@ export interface ViewerProps {
   isAuthed: boolean;
   isNavLocked: boolean;
   isSettingLocked: boolean;
+  isDockedRight: boolean;
   isHideBackground: boolean;
+  isParagraphMode: boolean;
+  isReadingRuler: boolean;
   defaultSyncOption: string;
   scale: string;
   margin: string;

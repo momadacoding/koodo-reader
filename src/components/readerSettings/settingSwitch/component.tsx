@@ -7,6 +7,32 @@ import { wordFrequencyList } from "../../../constants/dropdownList";
 import toast from "react-hot-toast";
 import { detectLocalLanguage } from "../../../utils/common";
 import BookUtil from "../../../utils/file/bookUtil";
+import SliderList from "../sliderList";
+
+const readingRulerSliderConfigs = [
+  {
+    maxValue: 20,
+    minValue: 0,
+    mode: "readingRulerLineHeight",
+    minLabel: "0",
+    maxLabel: "20",
+    step: 1,
+    title: "Line height",
+    isPDF: false,
+    defaultValue: 3,
+  },
+  {
+    maxValue: 1,
+    minValue: 0,
+    mode: "readingRulerBackgroundOpacity",
+    minLabel: "0",
+    maxLabel: "1",
+    step: 0.05,
+    title: "Background opacity",
+    isPDF: false,
+    defaultValue: 0.5,
+  },
+];
 class SettingSwitch extends React.Component<
   SettingSwitchProps,
   SettingSwitchState
@@ -21,6 +47,8 @@ class SettingSwitch extends React.Component<
       isItalic: ConfigService.getReaderConfig("isItalic") === "yes",
       isInvert: ConfigService.getReaderConfig("isInvert") === "yes",
       isBionic: ConfigService.getReaderConfig("isBionic") === "yes",
+      isParagraphMode:
+        ConfigService.getReaderConfig("isParagraphMode") === "yes",
       isHyphenation: ConfigService.getReaderConfig("isHyphenation") === "yes",
       isOrphanWidow: ConfigService.getReaderConfig("isOrphanWidow") === "yes",
       isKeepPDFBackground:
@@ -37,6 +65,11 @@ class SettingSwitch extends React.Component<
       isCustomBookCSS:
         ConfigService.getReaderConfig("isCustomBookCSS") === "yes",
       customBookCSS: ConfigService.getReaderConfig("customBookCSS") || "",
+      isReadingRuler: ConfigService.getReaderConfig("isReadingRuler") === "yes",
+      readingRulerLineHeight:
+        ConfigService.getReaderConfig("readingRulerLineHeight") || "3",
+      readingRulerBackgroundOpacity:
+        ConfigService.getReaderConfig("readingRulerBackgroundOpacity") || "0.3",
       isWordDefinition: ConfigService.getAllListConfig(
         "wordDefinitionBooks"
       ).includes(props.currentBook?.key),
@@ -234,6 +267,7 @@ class SettingSwitch extends React.Component<
         <div className="single-control-switch-container" key="isWordDefinition">
           <span className="single-control-switch-title">
             <Trans>Enable word definitions</Trans>
+            <span style={{ fontSize: "13px", color: "#f16464" }}> (Pro)</span>
           </span>
           <span
             className="single-control-switch"
@@ -247,6 +281,14 @@ class SettingSwitch extends React.Component<
                   this.props.handleSetting(true);
                   this.props.handleSettingMode("account");
                   ConfigService.setReaderConfig("fullTranslationMode", "no");
+                  return;
+                }
+                if (this.state.isBionic) {
+                  toast.error(
+                    this.props.t(
+                      "Word definitions and fast reading mode cannot be enabled at the same time"
+                    )
+                  );
                   return;
                 }
                 let lang = "";
@@ -372,6 +414,62 @@ class SettingSwitch extends React.Component<
               </li>
             );
           })()}
+        <div className="single-control-switch-container" key="isReadingRuler">
+          <span className="single-control-switch-title">
+            <Trans>Enable reading ruler</Trans>
+          </span>
+          <span
+            className="single-control-switch"
+            onClick={() => {
+              const next = !this.state.isReadingRuler;
+              this.setState({ isReadingRuler: next });
+              ConfigService.setReaderConfig(
+                "isReadingRuler",
+                next ? "yes" : "no"
+              );
+              this.props.handleReadingRuler(next);
+              if (next) {
+                if (!ConfigService.getReaderConfig("readingRulerLineHeight")) {
+                  ConfigService.setReaderConfig("readingRulerLineHeight", "3");
+                }
+                if (
+                  !ConfigService.getReaderConfig(
+                    "readingRulerBackgroundOpacity"
+                  )
+                ) {
+                  ConfigService.setReaderConfig(
+                    "readingRulerBackgroundOpacity",
+                    "0.3"
+                  );
+                }
+              }
+              toast(this.props.t("Change successful"));
+              setTimeout(async () => {
+                await this.props.renderBookFunc();
+              }, 500);
+            }}
+            style={this.state.isReadingRuler ? {} : { opacity: 0.6 }}
+          >
+            <span
+              className="single-control-button"
+              style={
+                !this.state.isReadingRuler
+                  ? {
+                      transform: "translateX(0px)",
+                      transition: "transform 0.5s ease",
+                    }
+                  : {
+                      transform: "translateX(20px)",
+                      transition: "transform 0.5s ease",
+                    }
+              }
+            ></span>
+          </span>
+        </div>
+        {this.state.isReadingRuler &&
+          readingRulerSliderConfigs.map((item) => (
+            <SliderList key={item.mode} {...{ item }} />
+          ))}
         {readerSettingList
           .filter((item) => {
             if (
@@ -403,7 +501,17 @@ class SettingSwitch extends React.Component<
                     isShowPageBorder: this.props.handleShowBorder,
                   };
 
-                  if (propName === "isShowPageBorder") {
+                  if (propName === "isBionic") {
+                    if (!this.state.isBionic && this.state.isWordDefinition) {
+                      toast.error(
+                        this.props.t(
+                          "Word definitions and fast reading mode cannot be enabled at the same time"
+                        )
+                      );
+                      return;
+                    }
+                    this._handleChange(propName);
+                  } else if (propName === "isShowPageBorder") {
                     this.props.handleShowBorder(!this.state.isShowPageBorder);
                     if (!this.state.isShowPageBorder) {
                       this.props.handleHideBackground(true);
@@ -415,6 +523,12 @@ class SettingSwitch extends React.Component<
                     this.handleChange(propName);
                     setTimeout(() => {
                       BookUtil.reloadBooks(this.props.currentBook);
+                    }, 500);
+                  } else if (propName === "isParagraphMode") {
+                    this.props.handleParagraphMode(!this.state.isParagraphMode);
+                    this.handleChange(propName);
+                    setTimeout(async () => {
+                      await this.props.renderBookFunc();
                     }, 500);
                   } else if (propName in renderProps) {
                     renderProps[propName]!(!this.state[propName]);

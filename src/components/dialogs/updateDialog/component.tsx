@@ -18,10 +18,7 @@ import {
   handleClearToken,
 } from "../../../utils/request/common";
 import { isBuiltinAutoUpdateEnabled } from "../../../utils/updateSupport";
-import {
-  ConfigService,
-  TokenService,
-} from "../../../assets/lib/kookit-extra-browser.min";
+import { ConfigService } from "../../../assets/lib/kookit-extra-browser.min";
 import toast from "react-hot-toast";
 import { isWindows } from "react-device-detect";
 
@@ -59,10 +56,18 @@ class UpdateInfo extends React.Component<UpdateInfoProps, UpdateInfoState> {
       ) {
         return;
       }
-      if ((process as any).windowsStore) {
+      if (window.electronAPI?.runtime?.windowsStore) {
         return;
       }
-      if (stableVersion === packageInfo.version) {
+      if (!ConfigService.getReaderConfig("updateChannel")) {
+        if (compareVersions(packageInfo.version, stableVersion) > 0) {
+          ConfigService.setReaderConfig("updateChannel", "dev");
+        }
+      }
+      if (
+        stableVersion === packageInfo.version &&
+        ConfigService.getReaderConfig("updateChannel") !== "dev"
+      ) {
         return;
       }
       if (compareVersions(newVersion, packageInfo.version) > 0) {
@@ -164,13 +169,13 @@ class UpdateInfo extends React.Component<UpdateInfoProps, UpdateInfoState> {
                   className="new-version-open"
                   onClick={() => {
                     if (isWindows) {
-                      const { ipcRenderer } = window.require("electron");
+                      const ipcRenderer = window.electronAPI;
                       if (!this.state.isDownloading) {
                         // 先注册事件监听器，再调用下载
                         this.setState({ isDownloading: true });
                         ipcRenderer.on(
                           "download-app-progress",
-                          (_event: any, config: any) => {
+                          (config: any) => {
                             this.setState({
                               progress: config.progress,
                               downloadedMB: config.downloadedMB,
@@ -179,7 +184,10 @@ class UpdateInfo extends React.Component<UpdateInfoProps, UpdateInfoState> {
                             toast.loading(
                               this.props.t("Downloading") +
                                 `(${config.downloadedMB} / ${config.totalMB} MB)`,
-                              { id: "download-progress" }
+                              {
+                                id: "download-progress",
+                                position: "bottom-center",
+                              }
                             );
                           }
                         );

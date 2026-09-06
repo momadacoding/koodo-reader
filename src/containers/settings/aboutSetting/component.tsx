@@ -31,7 +31,7 @@ class AboutSetting extends React.Component<SettingInfoProps, SettingInfoState> {
             <span
               className="change-location-button"
               onClick={async () => {
-                const { ipcRenderer } = window.require("electron");
+                const ipcRenderer = window.electronAPI;
                 ipcRenderer.invoke("get-debug-logs", "ping");
               }}
             >
@@ -47,8 +47,8 @@ class AboutSetting extends React.Component<SettingInfoProps, SettingInfoState> {
               className="change-location-button"
               onClick={async () => {
                 window
-                  .require("electron")
-                  .ipcRenderer.invoke("open-console", "ping");
+                  .electronAPI
+                  .invoke("open-console", "ping");
               }}
             >
               <Trans>View</Trans>

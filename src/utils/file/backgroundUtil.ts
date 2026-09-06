@@ -4,6 +4,7 @@ import { ConfigService } from "../../assets/lib/kookit-extra-browser.min";
 import { LocalFileManager } from "./localFile";
 import localforage from "localforage";
 import { Buffer } from "buffer";
+import i18n from "../../i18n";
 // @ts-ignore – no bundled type declarations
 import ColorThief from "color-thief-browser";
 
@@ -28,14 +29,23 @@ class BackgroundUtil {
     return { extension, arrayBuffer: bytes.buffer };
   }
 
-  /** Save image file for an id. */
+  /** Save image file for an id from a data-URL. */
   static async saveImage(id: string, dataUrl: string): Promise<void> {
     const { extension, arrayBuffer } = this.convertDataUrl(dataUrl);
+    await this.saveImageBuffer(id, arrayBuffer, extension);
+  }
+
+  /** Save raw image bytes for an id. */
+  static async saveImageBuffer(
+    id: string,
+    arrayBuffer: ArrayBuffer,
+    extension: string
+  ): Promise<void> {
     const filename = `${id}.${extension}`;
 
     if (isElectron) {
-      const fs = window.require("fs");
-      const path = window.require("path");
+      const fs = window.electronAPI.fs;
+      const path = window.electronAPI.path;
       const dir = path.join(getStorageLocation() || "", BG_FOLDER);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -45,8 +55,12 @@ class BackgroundUtil {
       if (ConfigService.getItem("isUseLocal") === "yes") {
         await LocalFileManager.saveFile(filename, arrayBuffer, BG_FOLDER);
       } else {
-        // store raw dataUrl in localforage keyed by `background_<id>`
-        await localforage.setItem(`background_${id}`, dataUrl);
+        const mime = extension === "jpg" ? "image/jpeg" : `image/${extension}`;
+        const base64 = Buffer.from(arrayBuffer).toString("base64");
+        await localforage.setItem(
+          `background_${id}`,
+          `data:${mime};base64,${base64}`
+        );
       }
     }
   }
@@ -54,8 +68,8 @@ class BackgroundUtil {
   /** Load image data URL by id. Returns empty string if not found. */
   static async loadImage(id: string, extension?: string): Promise<string> {
     if (isElectron) {
-      const fs = window.require("fs");
-      const path = window.require("path");
+      const fs = window.electronAPI.fs;
+      const path = window.electronAPI.path;
       const dir = path.join(getStorageLocation() || "", BG_FOLDER);
       if (!fs.existsSync(dir)) return "";
       const files: string[] = fs.readdirSync(dir);
@@ -64,7 +78,7 @@ class BackgroundUtil {
       const filePath = path.join(dir, file);
       const ext = file.split(".").pop() || "png";
       const buf: Buffer = fs.readFileSync(filePath);
-      const base64 = buf.toString("base64");
+      const base64 = Buffer.from(buf).toString("base64");
       const mime = ext === "jpg" ? "image/jpeg" : `image/${ext}`;
       return `data:${mime};base64,${base64}`;
     } else {
@@ -86,8 +100,8 @@ class BackgroundUtil {
   /** Delete image file by id. */
   static async deleteImage(id: string): Promise<void> {
     if (isElectron) {
-      const fs = window.require("fs");
-      const path = window.require("path");
+      const fs = window.electronAPI.fs;
+      const path = window.electronAPI.path;
       const dir = path.join(getStorageLocation() || "", BG_FOLDER);
       if (!fs.existsSync(dir)) return;
       const files: string[] = fs.readdirSync(dir);
@@ -173,7 +187,7 @@ class BackgroundUtil {
   }
 
   static deleteImageMeta(id: string): void {
-    ConfigService.setObjectConfig(id, null, "customBackgrounds");
+    ConfigService.deleteObjectConfig(id, "customBackgrounds");
   }
 
   /** Return all stored image ids using ConfigService list config */
@@ -187,6 +201,81 @@ class BackgroundUtil {
 
   static removeImageId(id: string): void {
     ConfigService.deleteListConfig(id, "backgroundList");
+  }
+
+  /** Featured backgrounds live on the public storage server, 1-indexed. */
+  static getFeaturedBackgroundId(index: number): string {
+    return `official-background-${index}`;
+  }
+
+  static getFeaturedThumbnailUrl(index: number): string {
+    return `https://storage.koodoreader.com/backgrounds/desktop-thumbnail/official-background-${index}.png`;
+  }
+
+  static getFeaturedOriginalUrl(index: number): string {
+    return `https://storage.koodoreader.com/backgrounds/desktop/official-background-${index}.png`;
+  }
+
+  /**
+   * Download a featured background into local storage (with progress).
+   * Returns its local data-URL, or null when the download fails.
+   */
+  static async downloadFeaturedBackground(
+    index: number,
+    onProgress?: (progress: number) => void
+  ): Promise<string | null> {
+    const id = this.getFeaturedBackgroundId(index);
+    const extension = "png";
+    const response = await fetch(this.getFeaturedOriginalUrl(index), {
+      headers: {
+        "Cache-Control": "no-transform",
+        "Accept-Encoding": "identity",
+      },
+    });
+    if (!response.ok) return null;
+
+    const contentLength = Number(response.headers.get("Content-Length") || 0);
+    let arrayBuffer: ArrayBuffer;
+    const reader = response.body?.getReader();
+    if (!reader) {
+      arrayBuffer = await response.arrayBuffer();
+    } else {
+      const chunks: Uint8Array[] = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          received += value.length;
+          if (contentLength > 0 && onProgress) {
+            onProgress(received / contentLength);
+          }
+        }
+      }
+      const merged = new Uint8Array(received);
+      let offset = 0;
+      for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      arrayBuffer = merged.buffer;
+    }
+
+    await this.saveImageBuffer(id, arrayBuffer, extension);
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    const dataUrl = `data:image/${extension};base64,${base64}`;
+    const { backgroundColor, textColor } = await this.analyzeImageColors(
+      dataUrl
+    );
+    this.saveImageMeta(id, {
+      name: `${i18n.t("Official background")} ${index}`,
+      extension,
+      backgroundColor,
+      textColor,
+    });
+    this.addImageId(id);
+    return dataUrl;
   }
 }
 
